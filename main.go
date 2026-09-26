@@ -4,7 +4,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -36,6 +39,8 @@ type Config struct {
 	TLSKey    string
 	Auth      bool   // 是否启用登录验证
 	UsersFile string // 用户文件路径（启用登录验证时使用）
+
+	TrustedProxies []string // 可信反向代理（IP 或 CIDR）；仅直连来源在此列表内时采信 X-Forwarded-For / X-Real-IP
 }
 
 func defaultConfig() Config {
@@ -63,6 +68,10 @@ access_log = false
 
 # 用户文件；不设 users_file 时默认为配置文件同目录下的 users.json
 # users_file = /etc/jsonviewer/users.json
+
+# 可信反向代理（逗号分隔，单个 IP 或 CIDR）。仅当直连来源在此列表内才信任
+# X-Forwarded-For / X-Real-IP，用于登录限速与日志中的真实客户端 IP
+# trusted_proxies = 127.0.0.1
 `
 
 // loadConfigFile 读取 key = value 格式的配置文件。
@@ -118,6 +127,12 @@ func applyOption(cfg *Config, key, val string) error {
 		cfg.Auth = b
 	case "users_file":
 		cfg.UsersFile = val
+	case "trusted_proxies":
+		list := splitList(val)
+		if _, err := parseTrustedProxies(list); err != nil {
+			return err
+		}
+		cfg.TrustedProxies = list
 	default:
 		return fmt.Errorf("未知配置项 %q", key)
 	}
@@ -152,6 +167,7 @@ func main() {
 		flagTLSKey    string
 		flagAuth      bool
 		flagUsersFile string
+		flagProxies   string
 		resetUser     string
 	)
 	// 长短名绑定同一个变量；flag 包同时接受 -name 与 --name。
@@ -168,6 +184,7 @@ func main() {
 	flag.StringVar(&flagTLSKey, "tls-key", "", "TLS 私钥文件")
 	flag.BoolVar(&flagAuth, "auth", false, "启用登录验证")
 	flag.StringVar(&flagUsersFile, "users-file", "", "用户文件路径")
+	flag.StringVar(&flagProxies, "trusted-proxies", "", "可信反向代理列表（逗号分隔的 IP 或 CIDR）")
 	flag.StringVar(&resetUser, "reset-password", "", "重置指定用户的密码并退出")
 	for _, name := range []string{"c", "config"} {
 		flag.StringVar(&configPath, name, "", "配置文件路径")
@@ -187,6 +204,9 @@ func main() {
       --tls-key <file>      TLS 私钥文件
       --auth                启用登录验证（首次访问进入 /setup 设置管理员）
       --users-file <file>   用户文件（默认为配置文件同目录下的 users.json）
+      --trusted-proxies <list>
+                            可信反向代理，逗号分隔的 IP 或 CIDR，如 127.0.0.1,10.0.0.0/8；
+                            仅当直连来源在此列表内才信任 X-Forwarded-For / X-Real-IP
       --reset-password <user>
                             重置该用户的密码（新密码从标准输入读取）并退出
   -c, --config <file>       配置文件路径（key = value 格式）
@@ -226,6 +246,11 @@ func main() {
 		"tls-key":    func() { cfg.TLSKey = flagTLSKey },
 		"auth":       func() { cfg.Auth = flagAuth },
 		"users-file": func() { cfg.UsersFile = flagUsersFile },
+		"trusted-proxies": func() {
+			if err := applyOption(&cfg, "trusted_proxies", flagProxies); err != nil {
+				log.Fatalf("--trusted-proxies: %v", err)
+			}
+		},
 	}
 	flag.Visit(func(f *flag.Flag) {
 		if set, ok := overrides[f.Name]; ok {
@@ -345,6 +370,7 @@ func displayAddr(a net.Addr) string {
 // 顺序：accessLog → base_path StripPrefix → requireLogin → 内层路由。
 func newHandler(root fs.FS, cfg Config, auth *authServer) http.Handler {
 	files := http.FileServer(http.FS(root))
+	etags := staticETags(root)
 	static := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -353,11 +379,15 @@ func newHandler(root fs.FS, cfg Config, auth *authServer) http.Handler {
 		}
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-			h.Set("Cache-Control", "no-cache")
-		} else {
-			h.Set("Cache-Control", "public, max-age=3600")
+		h.Set("Referrer-Policy", "same-origin")
+		// 协商缓存：每次都向服务端确认，内容未变时由 FileServer 按 If-None-Match 返回 304。
+		h.Set("Cache-Control", "no-cache")
+		p := r.URL.Path
+		if strings.HasSuffix(p, "/") {
+			p += "index.html"
+		}
+		if tag, ok := etags[path.Clean(p)]; ok {
+			h.Set("ETag", tag)
 		}
 		files.ServeHTTP(w, r)
 	})
@@ -388,9 +418,36 @@ func newHandler(root fs.FS, cfg Config, auth *authServer) http.Handler {
 		h = mux
 	}
 	if cfg.AccessLog {
-		h = accessLog(h)
+		// 启动时已校验过 trusted_proxies，这里不会出错。
+		proxies, err := parseTrustedProxies(cfg.TrustedProxies)
+		if err != nil {
+			log.Printf("忽略 trusted_proxies: %v", err)
+		}
+		h = accessLog(h, proxies)
 	}
 	return h
+}
+
+// staticETags 为嵌入的每个文件计算弱 ETag（sha256 前 16 位十六进制），键为 "/" 开头的路径。
+// 用弱 ETag 是因为 nginx 开启 gzip 时会丢弃强 ETag、保留弱 ETag。
+func staticETags(root fs.FS) map[string]string {
+	m := make(map[string]string)
+	err := fs.WalkDir(root, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(root, p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		m["/"+p] = `W/"` + hex.EncodeToString(sum[:])[:16] + `"`
+		return nil
+	})
+	if err != nil {
+		log.Printf("计算静态文件 ETag 失败: %v", err)
+	}
+	return m
 }
 
 type statusWriter struct {
@@ -403,12 +460,12 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func accessLog(next http.Handler) http.Handler {
+func accessLog(next http.Handler, proxies trustedProxies) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		log.Printf("%s %s %s %d %s", r.RemoteAddr, r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Microsecond))
+		log.Printf("%s %s %s %d %s", proxies.clientIP(r), r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Microsecond))
 	})
 }
 

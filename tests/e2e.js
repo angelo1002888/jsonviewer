@@ -3,6 +3,7 @@
  * 用法：make build && npm install && npm run test:e2e
  * 环境变量：CHROME=/path/to/chrome（默认 /usr/bin/google-chrome）、BIG=200000（大 JSON 记录数，0 跳过性能测试）
  * 另起一个启用登录验证（auth = true）的实例，在独立的 BrowserContext 中测试初始设置、登录、用户菜单与用户管理。
+ * 登录实例监听 0.0.0.0，并通过本机局域网 IPv4 访问（非安全上下文：无 Sec-Fetch-Site、Origin 可能为 null），没有则回退 127.0.0.1。
  */
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
@@ -22,6 +23,15 @@ function check(name, ok, detail) {
 }
 function freePort() {
   return new Promise((res, rej) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
+}
+// 本机第一个非回环 IPv4 地址，没有则回退 127.0.0.1
+function lanIPv4() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const i of list || []) {
+      if ((i.family === 'IPv4' || i.family === 4) && !i.internal) return i.address;
+    }
+  }
+  return '127.0.0.1';
 }
 // 等待服务开始监听（最多 5 秒）
 async function waitPort(port) {
@@ -50,7 +60,7 @@ async function authSuite(browser) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonviewer-e2e-'));
   const port = await freePort();
   const conf = path.join(tmp, 'jsonviewer.conf');
-  fs.writeFileSync(conf, 'auth = true\nusers_file = ' + path.join(tmp, 'users.json') + '\nlisten = 127.0.0.1:' + port + '\n');
+  fs.writeFileSync(conf, 'auth = true\nusers_file = ' + path.join(tmp, 'users.json') + '\nlisten = 0.0.0.0:' + port + '\n');
   const srv = spawn(BIN, ['-c', conf], { stdio: ['ignore', 'pipe', 'pipe'] });
   srv.stderr.on('data', d => process.env.VERBOSE && process.stderr.write(d));
   let ctx;
@@ -66,7 +76,8 @@ async function authSuite(browser) {
       if (m.type() !== 'error' || EXPECTED_HTTP_ERR.test(m.text()) || /\/favicon\.ico$/.test((m.location() || {}).url || '')) return;
       errors.push('console: ' + m.text());
     });
-    const base = 'http://127.0.0.1:' + port;
+    const base = 'http://' + lanIPv4() + ':' + port;
+    console.log('  登录实例访问地址: ' + base);
     const where = () => new URL(page.url()).pathname;
     const menuInfo = async () => {
       await page.waitForSelector('#userMenu:not([hidden])', { timeout: 3000 });
@@ -96,6 +107,15 @@ async function authSuite(browser) {
     const me = await page.evaluate(() => fetch('api/me').then(r => r.json()));
     check('/api/me 返回登录用户', me.auth === true && me.user === 'admin' && me.admin === true, JSON.stringify(me));
 
+    // 静态文件协商缓存：带上次的弱 ETag 作 If-None-Match 得 304
+    const etag = await page.evaluate(async () => {
+      const r1 = await fetch('/css/style.css', { cache: 'no-store' });
+      const tag = r1.headers.get('ETag');
+      const r2 = await fetch('/css/style.css', { headers: { 'If-None-Match': tag } });
+      return [r1.status, tag, r1.headers.get('Cache-Control'), r2.status];
+    });
+    check('style.css 带弱 ETag、no-cache，If-None-Match 得 304', etag[0] === 200 && /^W\/"[0-9a-f]{16}"$/.test(etag[1]) && etag[2] === 'no-cache' && etag[3] === 304, etag.join(' '));
+
     // 3. 已设置后 /setup 不再可用
     await page.goto(base + '/setup', { waitUntil: 'networkidle0' });
     check('再次访问 /setup 被重定向', where() !== '/setup', where());
@@ -115,7 +135,7 @@ async function authSuite(browser) {
     const names = await page.$$eval('.auth-table tbody tr td:first-child', tds => tds.map(t => t.textContent.trim()));
     check('新增用户 bob 后列表出现 bob', names.some(n => n === 'bob'), names.join(','));
     const selfDel = await page.$$eval('.auth-table tbody tr', trs => trs.filter(tr => /（我）/.test(tr.textContent)).map(tr => !!tr.querySelector('button.danger')));
-    const del = await page.evaluate(() => fetch('/admin/users/delete', { method: 'POST', body: new URLSearchParams({ name: 'admin' }) }).then(async r => [r.status, await r.text()]));
+    const del = await page.evaluate(() => fetch('/admin/users/delete', { method: 'POST', body: new URLSearchParams({ name: 'admin', csrf: document.querySelector('input[name=csrf]').value }) }).then(async r => [r.status, await r.text()]));
     check('不能删除自己（无删除按钮，且提交被拒）', selfDel.length === 1 && !selfDel[0] && del[0] === 400 && del[1].includes('不能删除自己'), selfDel + ' ' + del[0]);
 
     // 6. 退出登录：清除该用户的暂存内容

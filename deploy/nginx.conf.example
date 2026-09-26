@@ -1,0 +1,67 @@
+# jsonviewer 的 nginx 反向代理示例（HTTPS）
+# 放到 /etc/nginx/conf.d/jsonviewer.conf 或 sites-available 后：nginx -t && systemctl reload nginx
+#
+# 前提：
+#   1. /etc/jsonviewer/jsonviewer.conf 里把 listen 改为 127.0.0.1:8080，避免绕过 nginx 直接访问。
+#   2. 把下面的 json.example.com 换成你的域名，证书路径换成实际文件。
+#      Let's Encrypt：certbot --nginx -d json.example.com 会自动填好证书行；
+#      自签名：openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+#                -keyout /etc/nginx/ssl/jsonviewer.key -out /etc/nginx/ssl/jsonviewer.crt -subj "/CN=json.example.com"
+#   3. 保留 Host、X-Forwarded-Proto 两个头：前者用于日志与重定向，后者让登录 Cookie 带上 Secure。
+#      若启用了登录验证并希望登录限速按真实客户端 IP 计数，在 jsonviewer.conf 里设置 trusted_proxies = 127.0.0.1（多个用逗号分隔）。
+
+# HTTP 一律跳转到 HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name json.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;                     # nginx < 1.25.1 请改为在 listen 行末尾加 http2
+    server_name json.example.com;
+
+    # ---- 证书 ----
+    ssl_certificate     /etc/nginx/ssl/jsonviewer.crt;    # 或 /etc/letsencrypt/live/json.example.com/fullchain.pem
+    ssl_certificate_key /etc/nginx/ssl/jsonviewer.key;    # 或 /etc/letsencrypt/live/json.example.com/privkey.pem
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_timeout 1d;
+    ssl_session_cache   shared:jsonviewer_ssl:10m;
+    ssl_session_tickets off;
+
+    # 静态资源可压缩；服务端用弱 ETag，gzip 后浏览器仍可 304 协商缓存
+    gzip on;
+    gzip_types text/css application/javascript application/json image/gif image/png;
+
+    # 页面本身很小，JSON 内容只在浏览器里处理、不会上传，因此无需调大 client_max_body_size
+
+    access_log /var/log/nginx/jsonviewer.access.log;
+    error_log  /var/log/nginx/jsonviewer.error.log;
+
+    # ---- 根路径反代（jsonviewer.conf 里 base_path = /）----
+    location / {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $http_host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_redirect     off;
+    }
+
+    # ---- 子路径反代（改用这一段时，jsonviewer.conf 里设置 base_path = /jsonviewer，并删掉上面的 location / ）----
+    # location /jsonviewer/ {
+    #     proxy_pass         http://127.0.0.1:8080;      # 结尾不带路径，前缀原样传给后端
+    #     proxy_http_version 1.1;
+    #     proxy_set_header   Host              $http_host;
+    #     proxy_set_header   X-Real-IP         $remote_addr;
+    #     proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    #     proxy_set_header   X-Forwarded-Proto $scheme;
+    #     proxy_redirect     off;
+    # }
+    # location = /jsonviewer { return 301 /jsonviewer/; }
+}

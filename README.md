@@ -57,6 +57,7 @@ Go's `flag` package treats single and double dashes the same (`-listen` and `--l
 | `--tls-key` (no short form) | TLS private key file | empty (disabled) |
 | `--auth` (no short form) | Enable login authentication (first visit redirects to `/setup` to create the admin) | `false` |
 | `--users-file <file>` (no short form) | Path to the user data file | `users.json` next to the config file (or in the current directory if `-c` is not used) |
+| `--trusted-proxies <list>` (no short form) | Comma-separated IPs/CIDRs (e.g. `127.0.0.1, ::1, 10.0.0.0/8`); `X-Forwarded-For`/`X-Real-IP` are only trusted when the direct connection's source address is in this list | empty (no proxy header trusted; the raw TCP connection address is used) |
 | `--reset-password <user>` (no short form) | Reset the given user's password (new password read from stdin) and exit; does not start the server | - |
 | `-c, --config` | Path to a config file (`key = value` format) | empty (no config file) |
 | `-v, --version` | Print the version and exit | - |
@@ -115,16 +116,6 @@ The service supports graceful shutdown: on receiving `SIGINT` / `SIGTERM`, it fi
 curl -fsSL https://raw.githubusercontent.com/angelo1002888/jsonviewer/main/deploy/install.sh | sudo bash
 ```
 
-With options (specify listen address and version):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/angelo1002888/jsonviewer/main/deploy/install.sh | sudo bash -s -- -l 127.0.0.1:8080 -v v0.1.1
-```
-
-| Option | Description |
-| --- | --- |
-| `-v, --version <tag>` | Install a specific release (e.g. `v0.1.1`); defaults to the latest release |
-| `-l, --listen <addr>` | Listen address written into a newly created config file; defaults to `:8080` |
 
 What the script does: downloads the binary and verifies its SHA256, installs it to `/usr/local/bin/jsonviewer`, creates the `jsonviewer` system user, installs the systemd unit and runs `daemon-reload`, and writes `/etc/jsonviewer/jsonviewer.conf` — if that file already exists, it is left untouched and the new template is saved as `jsonviewer.conf.new` instead. It does not start the service.
 
@@ -203,7 +194,9 @@ No login is required by default. Set `auth = true` in the config file (or pass `
 
 The standalone `/account` and `/admin/users` pages also show a status bar at the top with the current user and links/buttons for "back to viewer", "account settings", "user management" (admins only), and "log out". Note: these auth pages (`/setup`, `/login`, `/account`, `/admin/users`) are Chinese-only; their text is hardcoded in the Go templates.
 
-**Sessions and security**: login state is a cookie-based session with a 7-day sliding expiry (visits more than a minute apart refresh it); sessions live in memory only, so everyone must log in again after a service restart. Deleting a user, or an admin resetting someone's password, immediately invalidates that user's session(s). Failed logins are rate-limited: 10 failures from the same IP or against the same username lock that key for 60 seconds. Logins, logouts, and user/admin changes are all logged (journal). The user file is written with mode `0600` and stores only PBKDF2-SHA256 password hashes (210,000 iterations), never plaintext. (Unrelated to auth: pasted JSON content always stays in the browser and is never uploaded to the server.)
+**Sessions and security**: login state is a cookie-based session with a 7-day sliding expiry (visits more than a minute apart refresh it); sessions live in memory only, so everyone must log in again after a service restart. Deleting a user, or an admin resetting someone's password, immediately invalidates that user's session(s). Failed logins are rate-limited: 10 failures from the same IP or against the same username lock that key for 60 seconds. That IP is taken from the raw TCP connection by default; it only switches to the address in `X-Forwarded-For`/`X-Real-IP` when the connection's source is listed in `trusted_proxies` (see "Reverse proxy" below) — behind a reverse proxy without this set, rate-limiting counts every visitor as the proxy's own IP and can lock everyone out. Logins, logouts, and user/admin changes are all logged (journal). The user file is written with mode `0600` and stores only PBKDF2-SHA256 password hashes (210,000 iterations), never plaintext. (Unrelated to auth: pasted JSON content always stays in the browser and is never uploaded to the server.)
+
+**CSRF and static asset caching**: write requests are protected by a double-submit CSRF token (an HttpOnly cookie plus a hidden form field); it does not rely on `Origin`/`Referer`/`Host`, so a reverse proxy rewriting those headers needs no special handling. Static assets use ETag-based conditional caching, so a new version is picked up automatically after an upgrade — no manual cache clearing needed.
 
 **Recovering a lost password**:
 
@@ -217,20 +210,25 @@ echo 'new-password' | sudo -u jsonviewer jsonviewer -c /etc/jsonviewer/jsonviewe
 
 ## Reverse proxy
 
-If you mount the app under a sub-path via Nginx or another reverse proxy (rather than serving it at the domain root), set `base_path` to that sub-path (e.g. `/jsonviewer`) so that the frontend's asset paths match the proxy path.
+The recommended starting point is the bundled `deploy/nginx.conf.example` (also attached to each GitHub Release). It includes an HTTP (80) to HTTPS (443) redirect, certificate paths for both Let's Encrypt and self-signed setups (the commands for each are in the file's comments), TLS settings, gzip, and both a root-path and a sub-path `location` block (use whichever matches jsonviewer's `base_path`). Copy it, fill in your domain and certificate paths per the comments, then `nginx -t && systemctl reload nginx`.
 
-When authentication is enabled, the reverse proxy must forward the `Host` header unchanged (it's used for the same-origin check on POST requests). If accessed over HTTPS through the proxy, also set `X-Forwarded-Proto https` so the session cookie gets the `Secure` flag.
+If you mount the app under a sub-path (rather than serving it at the domain root), set `base_path` to that sub-path (e.g. `/jsonviewer`) so that the frontend's asset paths match the proxy path.
 
-Minimal Nginx config snippet (assuming sub-path `/jsonviewer`, backend listening on `127.0.0.1:8080`, `base_path = /jsonviewer`):
+It's recommended to change jsonviewer's `listen` to `127.0.0.1:8080` so it can only be reached through Nginx, not directly.
+
+Minimal reverse-proxy `location` snippet (backend listening on `127.0.0.1:8080`, `base_path = /`):
 
 ```nginx
-location /jsonviewer/ {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+location / {
+    proxy_pass         http://127.0.0.1:8080;
+    proxy_set_header   Host              $http_host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
 }
 ```
+
+When authentication is enabled (`auth = true`), also set `trusted_proxies = 127.0.0.1` in jsonviewer's config file (use the proxy's real address instead if it's on another host; multiple entries are comma-separated) so jsonviewer trusts the `X-Real-IP`/`X-Forwarded-For` values set above. Without it, login rate-limiting counts every visitor under the proxy's own IP (e.g. `127.0.0.1`) and one user's failed logins can lock out everybody sharing that address.
 
 **About clipboard copy**: the browser's Clipboard API (`navigator.clipboard`) is only available over HTTPS or on `localhost`. If the app is accessed over plain HTTP through a reverse proxy (i.e. not `localhost`), the page automatically falls back to `document.execCommand('copy')`, so copying still works, but configuring HTTPS (see the `--tls-cert` / `--tls-key` flags above) is recommended for better compatibility.
 

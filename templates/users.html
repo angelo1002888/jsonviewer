@@ -1,5 +1,6 @@
 {{define "content"}}
 <form method="post" action="{{.Base}}admin/users/add" class="auth-inline-form">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="text" name="username" placeholder="用户名" maxlength="32" autocomplete="off" required>
   <input type="password" name="password" placeholder="密码（至少 6 位）" minlength="6" autocomplete="new-password" required>
   <label class="check"><input type="checkbox" name="admin" value="1">管理员</label>
@@ -15,17 +16,20 @@
     <td>{{.Created}}</td>
     <td class="ops">
       <form method="post" action="{{$.Base}}admin/users/password" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="name" value="{{.Name}}">
         <input type="password" name="password" placeholder="新密码" minlength="6" autocomplete="new-password" required>
         <button type="submit">重置密码</button>
       </form>
       <form method="post" action="{{$.Base}}admin/users/admin" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="name" value="{{.Name}}">
         <input type="hidden" name="admin" value="{{if .Admin}}false{{else}}true{{end}}">
         <button type="submit">{{if .Admin}}取消管理员{{else}}设为管理员{{end}}</button>
       </form>
       {{- if not .Self}}
       <form method="post" action="{{$.Base}}admin/users/delete" class="inline" onsubmit="return confirm('确定删除用户 {{.Name}} 吗？')">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="name" value="{{.Name}}">
         <button type="submit" class="danger">删除</button>
       </form>

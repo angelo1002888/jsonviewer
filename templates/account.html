@@ -1,5 +1,6 @@
 {{define "content"}}
 <form method="post" action="{{.Base}}account" class="auth-form narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="text" name="username" value="{{.User}}" autocomplete="username" hidden>
   <label>当前密码<input type="password" name="current" autocomplete="current-password" required></label>
   <label>新密码<input type="password" name="password" minlength="6" autocomplete="new-password" required></label>

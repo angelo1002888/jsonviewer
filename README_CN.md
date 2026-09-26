@@ -57,6 +57,7 @@ Go 的 `flag` 包对单横线和双横线一视同仁（`-listen` 与 `--listen`
 | `--tls-key`（无短名） | TLS 私钥文件 | 空（不启用） |
 | `--auth`（无短名） | 启用登录验证（首次访问进入 `/setup` 设置管理员） | `false` |
 | `--users-file <file>`（无短名） | 用户文件路径 | 配置文件同目录下的 `users.json`（未用 `-c` 时为当前目录） |
+| `--trusted-proxies <list>`（无短名） | 逗号分隔的 IP 或 CIDR 列表（如 `127.0.0.1, ::1, 10.0.0.0/8`）；只有直连来源在列表内时才信任其 `X-Forwarded-For`/`X-Real-IP` | 空（不信任任何代理头，直接用 TCP 连接地址） |
 | `--reset-password <user>`（无短名） | 重置指定用户的密码后退出（新密码从标准输入读取），不启动服务 | - |
 | `-c, --config` | 配置文件路径（`key = value` 格式） | 空（不使用配置文件） |
 | `-v, --version` | 显示版本号并退出 | - |
@@ -113,16 +114,6 @@ access_log = false
 curl -fsSL https://raw.githubusercontent.com/angelo1002888/jsonviewer/main/deploy/install.sh | sudo bash
 ```
 
-带参数示例（指定监听地址与版本）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/angelo1002888/jsonviewer/main/deploy/install.sh | sudo bash -s -- -l 127.0.0.1:8080 -v v0.1.1
-```
-
-| 参数 | 说明 |
-| --- | --- |
-| `-v, --version <tag>` | 安装指定版本（如 `v0.1.1`），默认最新 Release |
-| `-l, --listen <addr>` | 写入新配置文件的监听地址，默认 `:8080` |
 
 脚本会做的事：下载二进制并校验 SHA256，安装到 `/usr/local/bin/jsonviewer`，创建 `jsonviewer` 系统用户，安装 systemd 单元并执行 `daemon-reload`，写入 `/etc/jsonviewer/jsonviewer.conf`——若该文件已存在则不覆盖，新模板另存为 `jsonviewer.conf.new`。脚本不会自动启动服务。
 
@@ -201,7 +192,9 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 `/account`、`/admin/users` 这两个独立页面顶部也有一条状态栏，显示当前用户，并提供「返回查看器」「账户设置」「用户管理」（仅管理员可见）「退出登录」几个链接/按钮；这些页面（含 `/setup`、`/login`）文案固定为中文。
 
-**会话与安全**：登录状态通过 Cookie 保存，7 天滑动过期（距上次续期超过 1 分钟的访问会自动续期），会话保存在内存中，服务重启后所有人都需要重新登录；删除某用户，或管理员重置了某用户的密码后，该用户的会话会立即失效。登录失败会限速：同一 IP 或同一用户名连续失败 10 次后锁定 60 秒。登录、登出、新增/删除用户、重置密码、修改管理员权限等操作都会记录到日志（journal）。用户文件权限固定为 `0600`，只保存密码的 PBKDF2-SHA256（21 万次迭代）哈希，不保存明文密码。（顺带一提：查看器里粘贴的 JSON 内容始终只保存在浏览器本地、不会上传服务器，这与是否启用登录验证无关。）
+**会话与安全**：登录状态通过 Cookie 保存，7 天滑动过期（距上次续期超过 1 分钟的访问会自动续期），会话保存在内存中，服务重启后所有人都需要重新登录；删除某用户，或管理员重置了某用户的密码后，该用户的会话会立即失效。登录失败会限速：同一 IP 或同一用户名连续失败 10 次后锁定 60 秒。这里的 IP 默认取自直连的 TCP 连接地址；只有当连接来源在配置文件的 `trusted_proxies` 列表里时，才会改用 `X-Forwarded-For`/`X-Real-IP` 头判断的真实客户端 IP（见下文「反向代理」一节）——反代后不设置这一项，限速会把所有人都算成反代自身的 IP，可能导致所有人都被锁住。登录、登出、新增/删除用户、重置密码、修改管理员权限等操作都会记录到日志（journal）。用户文件权限固定为 `0600`，只保存密码的 PBKDF2-SHA256（21 万次迭代）哈希，不保存明文密码。（顺带一提：查看器里粘贴的 JSON 内容始终只保存在浏览器本地、不会上传服务器，这与是否启用登录验证无关。）
+
+**CSRF 与静态资源缓存**：写操作使用双提交 CSRF 令牌（HttpOnly Cookie + 表单隐藏字段）防护，不依赖 `Origin`/`Referer`/`Host`，反向代理改写这些请求头也不受影响，无需额外配置。静态资源使用 ETag 协商缓存，升级后浏览器会自动获取新版本，无需手动清缓存。
 
 **忘记密码时恢复**：
 
@@ -215,20 +208,25 @@ echo '新密码' | sudo -u jsonviewer jsonviewer -c /etc/jsonviewer/jsonviewer.c
 
 ## 反向代理
 
-若通过 Nginx 等反向代理挂在子路径下（而不是直接用域名根路径访问），需要将 `base_path` 设置为对应的子路径（例如 `/jsonviewer`），保证前端资源引用的路径与代理路径一致。
+推荐直接以仓库自带的 `deploy/nginx.conf.example`（GitHub Release 附件里也有一份）作为起点：内含 HTTP（80）到 HTTPS（443）的跳转、证书路径（Let's Encrypt 与自签名两种写法，对应命令在文件注释里）、TLS 参数、gzip 压缩，以及根路径与子路径两种 `location` 写法（用哪种取决于 jsonviewer 的 `base_path`）。复制一份，按注释填好域名和证书路径，`nginx -t && systemctl reload nginx` 即可生效。
 
-启用登录验证时，反向代理必须原样转发 `Host` 请求头（用于同源校验，POST 请求会校验 `Origin`/`Host`）；若通过 HTTPS 反代访问，还需设置 `X-Forwarded-Proto https`，登录会话的 Cookie 才会带上 `Secure` 标记。
+若挂在子路径下（而不是直接用域名根路径访问），需要将 `base_path` 设置为对应的子路径（例如 `/jsonviewer`），保证前端资源引用的路径与代理路径一致。
 
-Nginx 最小配置片段示例（假设子路径为 `/jsonviewer`，后端监听 `127.0.0.1:8080`，`base_path = /jsonviewer`）：
+建议把 jsonviewer 的 `listen` 改为 `127.0.0.1:8080`，使其只能通过 Nginx 访问，不能被绕过直连。
+
+最小反代 `location` 片段（后端监听 `127.0.0.1:8080`，`base_path = /`）：
 
 ```nginx
-location /jsonviewer/ {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+location / {
+    proxy_pass         http://127.0.0.1:8080;
+    proxy_set_header   Host              $http_host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
 }
 ```
+
+启用登录验证（`auth = true`）时，还需要在 jsonviewer 配置文件里设置 `trusted_proxies = 127.0.0.1`（反代与 jsonviewer 不在同一台机器时改成反代的真实地址，多个来源用逗号分隔），jsonviewer 才会信任上面设置的 `X-Real-IP`/`X-Forwarded-For`。不设置的话，登录限速会把所有访问者都算作反代自身的 IP（如 `127.0.0.1`），一个人登录失败次数过多会连带锁住所有共用该地址的人。
 
 **关于剪贴板复制**：浏览器的 Clipboard API（`navigator.clipboard`）只在 HTTPS 或 `localhost` 环境下可用。如果通过 HTTP 反向代理对外访问（非 `localhost`），页面会自动降级使用 `document.execCommand('copy')` 方案，复制功能依然可用，但建议尽量配置 HTTPS（见上文 `--tls-cert` / `--tls-key` 参数）以获得更好的兼容性。
 

@@ -2,7 +2,10 @@ package main
 
 import (
 	"encoding/hex"
+	"io/fs"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,33 +184,135 @@ func TestValidUsername(t *testing.T) {
 	}
 }
 
-func TestCheckSameOrigin(t *testing.T) {
+func newTestAuthHandler(t *testing.T) http.Handler {
+	t.Helper()
+	users, err := loadUsers(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Auth: true, BasePath: "/"}
+	a, err := newAuthServer(cfg, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newHandler(sub, cfg, a)
+}
+
+func TestCSRF(t *testing.T) {
+	h := newTestAuthHandler(t)
+
+	// GET /setup 下发 CSRF Cookie，表单里带同一个值
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/setup", nil))
+	var tok string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			tok = c.Value
+			if !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.MaxAge <= 0 {
+				t.Errorf("csrf cookie attrs: %+v", c)
+			}
+		}
+	}
+	if tok == "" || !strings.Contains(rec.Body.String(), `name="csrf" value="`+tok+`"`) {
+		t.Fatalf("GET /setup: csrf cookie %q not rendered into form", tok)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "same-origin" {
+		t.Errorf("Referrer-Policy = %q", got)
+	}
+
 	cases := []struct {
 		name    string
-		host    string
+		cookie  string
+		field   string
 		headers map[string]string
-		want    bool
+		want403 bool
 	}{
-		{"no headers", "example.com", nil, true},
-		{"sfs same-origin", "example.com", map[string]string{"Sec-Fetch-Site": "same-origin"}, true},
-		{"sfs none", "example.com", map[string]string{"Sec-Fetch-Site": "none"}, true},
-		{"sfs cross-site", "example.com", map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
-		{"sfs same-site", "example.com", map[string]string{"Sec-Fetch-Site": "same-site"}, false},
-		{"sfs wins over origin", "example.com", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "http://example.com"}, false},
-		{"origin match", "example.com:8080", map[string]string{"Origin": "http://example.com:8080"}, true},
-		{"origin match https", "example.com", map[string]string{"Origin": "https://example.com"}, true},
-		{"origin other host", "example.com", map[string]string{"Origin": "http://evil.example"}, false},
-		{"origin other port", "example.com:8080", map[string]string{"Origin": "http://example.com:9090"}, false},
-		{"origin null", "example.com", map[string]string{"Origin": "null"}, false},
+		{"no headers, valid token", tok, tok, nil, false},
+		{"origin null, valid token", tok, tok, map[string]string{"Origin": "null"}, false},
+		{"foreign origin, valid token", tok, tok, map[string]string{"Origin": "http://other.example"}, false},
+		{"sfs same-origin, valid token", tok, tok, map[string]string{"Sec-Fetch-Site": "same-origin"}, false},
+		{"sfs cross-site", tok, tok, map[string]string{"Sec-Fetch-Site": "cross-site"}, true},
+		{"sfs same-site", tok, tok, map[string]string{"Sec-Fetch-Site": "same-site"}, true},
+		{"missing field", tok, "", nil, true},
+		{"missing cookie", "", tok, nil, true},
+		{"mismatch", tok, tok + "x", nil, true},
 	}
 	for _, c := range cases {
-		r := httptest.NewRequest("POST", "http://"+c.host+"/login", nil)
+		form := url.Values{"username": {"admin"}, "password": {"x"}}
+		if c.field != "" {
+			form.Set("csrf", c.field)
+		}
+		r := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if c.cookie != "" {
+			r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: c.cookie})
+		}
 		for k, v := range c.headers {
 			r.Header.Set(k, v)
 		}
-		if got := checkSameOrigin(r); got != c.want {
-			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if got := rec.Code == http.StatusForbidden; got != c.want403 {
+			t.Errorf("%s: status %d, want403=%v", c.name, rec.Code, c.want403)
 		}
+	}
+
+	// 浏览器页面请求被拒时用认证页样式给出可读提示
+	r := httptest.NewRequest("POST", "/login", strings.NewReader("username=a"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Accept", "text/html")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "表单已过期，请刷新页面后重试") || !strings.Contains(rec.Body.String(), "css/style.css") {
+		t.Errorf("html 403: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// /api/me 返回令牌
+	r = httptest.NewRequest("GET", "/api/me", nil)
+	r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: tok})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if !strings.Contains(rec.Body.String(), `"csrf":"`+tok+`"`) {
+		t.Errorf("/api/me: %s", rec.Body.String())
+	}
+}
+
+func TestStaticETag(t *testing.T) {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, auth := range []bool{false, true} {
+		var h http.Handler
+		if auth {
+			h = newTestAuthHandler(t)
+		} else {
+			h = newHandler(sub, Config{BasePath: "/"}, nil)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/css/style.css", nil))
+		tag := rec.Header().Get("ETag")
+		if rec.Code != 200 || !strings.HasPrefix(tag, `W/"`) || len(tag) != 20 || rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Fatalf("auth=%v first: %d ETag=%q Cache-Control=%q", auth, rec.Code, tag, rec.Header().Get("Cache-Control"))
+		}
+		r := httptest.NewRequest("GET", "/css/style.css", nil)
+		r.Header.Set("If-None-Match", tag)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+			t.Errorf("auth=%v conditional: %d body=%d", auth, rec.Code, rec.Body.Len())
+		}
+	}
+	// index.html 通过 / 访问同样带 ETag
+	h := newHandler(sub, Config{BasePath: "/"}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 || rec.Header().Get("ETag") == "" || rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("/: %d ETag=%q", rec.Code, rec.Header().Get("ETag"))
 	}
 }
 

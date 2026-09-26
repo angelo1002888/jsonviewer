@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"html/template"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ var templatesFS embed.FS
 
 const (
 	sessionCookieName    = "jsonviewer_session"
+	csrfCookieName       = "jsonviewer_csrf"
 	sessionTTL           = 7 * 24 * time.Hour
 	sessionTouchInterval = time.Minute
 	loginMaxFails        = 10
@@ -184,20 +184,77 @@ func (l *loginLimiter) reset(keys ...string) {
 
 // ---------- CSRF ----------
 
-// checkSameOrigin：有 Sec-Fetch-Site 时只接受 same-origin/none；
-// 否则有 Origin 时其 host 必须等于 r.Host；两者都没有则放行。
-func checkSameOrigin(r *http.Request) bool {
-	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" {
-		return sfs == "same-origin" || sfs == "none"
+// 双提交令牌：jsonviewer_csrf Cookie（HttpOnly）的值同时写进表单隐藏字段 csrf，
+// POST 时两者必须一致。不依赖 Origin/Referer/Host（非安全上下文下 Origin 可能为 null，
+// 反向代理也可能改写 Host），跨站页面读不到 Cookie 值，因而无法伪造表单字段。
+
+// fetchSiteOK：有 Sec-Fetch-Site 时拒绝 cross-site 与 same-site；缺失（旧浏览器、非安全上下文）则放行，交由令牌校验。
+func fetchSiteOK(r *http.Request) bool {
+	sfs := r.Header.Get("Sec-Fetch-Site")
+	return sfs != "cross-site" && sfs != "same-site"
+}
+
+func csrfCookie(r *http.Request) string {
+	c, err := r.Cookie(csrfCookieName)
+	if err != nil {
+		return ""
 	}
-	if origin := r.Header.Get("Origin"); origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" {
-			return false
-		}
-		return strings.EqualFold(u.Host, r.Host)
+	return c.Value
+}
+
+// csrfTokenOK 比较表单字段 csrf 与 Cookie 值（调用前须已 ParseForm）。
+func csrfTokenOK(r *http.Request) bool {
+	form, cookie := r.PostFormValue("csrf"), csrfCookie(r)
+	return form != "" && cookie != "" && subtle.ConstantTimeCompare([]byte(form), []byte(cookie)) == 1
+}
+
+// ensureCSRF 返回当前请求的 CSRF 令牌；请求未携带时生成新令牌并 Set-Cookie。
+// 同一请求内只调用一次（刚设置的 Cookie 在 r 上读不到）。
+func (a *authServer) ensureCSRF(w http.ResponseWriter, r *http.Request) string {
+	if tok := csrfCookie(r); tok != "" {
+		return tok
+	}
+	tok := newToken()
+	http.SetCookie(w, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    tok,
+		Path:     a.cookiePath(),
+		MaxAge:   int(sessionTTL / time.Second),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   a.secure(r),
+	})
+	return tok
+}
+
+// checkCSRF 对非 GET/HEAD 请求做 CSRF 校验；失败时已写出 403 响应并返回 false。
+func (a *authServer) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
+	if !fetchSiteOK(r) {
+		log.Printf("拒绝跨站请求: %s %s from %s (Sec-Fetch-Site=%q)", r.Method, r.URL.Path, a.clientIP(r), r.Header.Get("Sec-Fetch-Site"))
+		a.forbidden(w, r, "跨站请求被拒绝")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return false
+	}
+	if !csrfTokenOK(r) {
+		log.Printf("CSRF 令牌缺失或不匹配: %s %s from %s", r.Method, r.URL.Path, a.clientIP(r))
+		a.forbidden(w, r, "表单已过期，请刷新页面后重试")
+		return false
 	}
 	return true
+}
+
+// forbidden 输出 403：浏览器页面请求用认证页样式，其余返回纯文本。
+func (a *authServer) forbidden(w http.ResponseWriter, r *http.Request, msg string) {
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		a.render(w, r, http.StatusForbidden, "message.html", pageData{Title: "请求被拒绝", Error: msg})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Error(w, "403 forbidden: "+msg, http.StatusForbidden)
 }
 
 // ---------- authServer ----------
@@ -208,6 +265,7 @@ type authServer struct {
 	users     *userStore
 	sessions  *sessionStore
 	limiter   *loginLimiter
+	proxies   trustedProxies
 	sem       chan struct{} // 限制并发 PBKDF2 计算
 	dummyHash string
 	tmpl      map[string]*template.Template
@@ -230,6 +288,7 @@ type pageData struct {
 	Admin    bool
 	Error    string
 	Notice   string
+	CSRF     string
 	Username string
 	Users    []userRow
 }
@@ -243,17 +302,22 @@ func siteBase(basePath string) string {
 }
 
 func newAuthServer(cfg Config, users *userStore) (*authServer, error) {
+	proxies, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
 	a := &authServer{
 		cfg:       cfg,
 		base:      siteBase(cfg.BasePath),
 		users:     users,
 		sessions:  newSessionStore(),
 		limiter:   newLoginLimiter(),
+		proxies:   proxies,
 		sem:       make(chan struct{}, 4),
 		dummyHash: hashPassword("jsonviewer-dummy-password"),
 		tmpl:      make(map[string]*template.Template),
 	}
-	for _, page := range []string{"login.html", "setup.html", "account.html", "users.html"} {
+	for _, page := range []string{"login.html", "setup.html", "account.html", "users.html", "message.html"} {
 		t, err := template.New("").ParseFS(templatesFS, "templates/layout.html", "templates/"+page)
 		if err != nil {
 			return nil, err
@@ -300,13 +364,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+// clientIP 返回经 trusted_proxies 判定后的客户端地址。
+func (a *authServer) clientIP(r *http.Request) string { return a.proxies.clientIP(r) }
 
 func (a *authServer) secure(r *http.Request) bool {
 	return a.cfg.TLSCert != "" || r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
@@ -378,12 +437,10 @@ func (a *authServer) redirect(w http.ResponseWriter, r *http.Request, rel string
 	http.Redirect(w, r, a.base+rel, http.StatusFound)
 }
 
-// requireLogin：POST 先做同源检查；公开路径直接放行；其余要求已登录。
+// requireLogin：POST 先做 CSRF 校验；公开路径直接放行；其余要求已登录。
 func (a *authServer) requireLogin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && !checkSameOrigin(r) {
-			log.Printf("拒绝跨站请求: %s %s from %s (Origin=%q Sec-Fetch-Site=%q)", r.Method, r.URL.Path, r.RemoteAddr, r.Header.Get("Origin"), r.Header.Get("Sec-Fetch-Site"))
-			http.Error(w, "403 forbidden: cross-site request", http.StatusForbidden)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !a.checkCSRF(w, r) {
 			return
 		}
 		// 每个请求先检查用户文件是否被外部修改（如运行中执行 --reset-password），
@@ -419,8 +476,9 @@ func (a *authServer) adminOnly(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (a *authServer) render(w http.ResponseWriter, status int, page string, d pageData) {
+func (a *authServer) render(w http.ResponseWriter, r *http.Request, status int, page string, d pageData) {
 	d.Base = a.base
+	d.CSRF = a.ensureCSRF(w, r)
 	var buf bytes.Buffer
 	if err := a.tmpl[page].ExecuteTemplate(&buf, "layout", d); err != nil {
 		log.Printf("渲染模板 %s 失败: %v", page, err)
@@ -432,7 +490,7 @@ func (a *authServer) render(w http.ResponseWriter, status int, page string, d pa
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Referrer-Policy", "same-origin")
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
@@ -467,7 +525,7 @@ func (a *authServer) getSetup(w http.ResponseWriter, r *http.Request) {
 		a.redirect(w, r, "login")
 		return
 	}
-	a.render(w, http.StatusOK, "setup.html", pageData{Title: "初始设置：创建管理员", Username: "admin"})
+	a.render(w, r, http.StatusOK, "setup.html", pageData{Title: "初始设置：创建管理员", Username: "admin"})
 }
 
 func (a *authServer) postSetup(w http.ResponseWriter, r *http.Request) {
@@ -483,12 +541,12 @@ func (a *authServer) postSetup(w http.ResponseWriter, r *http.Request) {
 	d := pageData{Title: "初始设置：创建管理员", Username: name}
 	if !validUsername(name) {
 		d.Error = errInvalidName.Error()
-		a.render(w, http.StatusBadRequest, "setup.html", d)
+		a.render(w, r, http.StatusBadRequest, "setup.html", d)
 		return
 	}
 	if msg := checkNewPassword(pw, r.PostFormValue("confirm")); msg != "" {
 		d.Error = msg
-		a.render(w, http.StatusBadRequest, "setup.html", d)
+		a.render(w, r, http.StatusBadRequest, "setup.html", d)
 		return
 	}
 	var err error
@@ -500,10 +558,10 @@ func (a *authServer) postSetup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("setup: 保存用户文件失败: %v", err)
 		d.Error = "保存用户文件失败: " + err.Error()
-		a.render(w, http.StatusInternalServerError, "setup.html", d)
+		a.render(w, r, http.StatusInternalServerError, "setup.html", d)
 		return
 	}
-	log.Printf("setup: 已创建管理员 %s (from %s)", name, r.RemoteAddr)
+	log.Printf("setup: 已创建管理员 %s (from %s)", name, a.clientIP(r))
 	a.setSessionCookie(w, r, a.sessions.create(name))
 	a.redirect(w, r, "")
 }
@@ -519,7 +577,7 @@ func (a *authServer) getLogin(w http.ResponseWriter, r *http.Request) {
 		a.redirect(w, r, "")
 		return
 	}
-	a.render(w, http.StatusOK, "login.html", pageData{Title: "登录"})
+	a.render(w, r, http.StatusOK, "login.html", pageData{Title: "登录"})
 }
 
 func (a *authServer) postLogin(w http.ResponseWriter, r *http.Request) {
@@ -533,11 +591,11 @@ func (a *authServer) postLogin(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("username"))
 	pw := r.PostFormValue("password")
 	d := pageData{Title: "登录", Username: name}
-	keys := []string{"ip:" + remoteHost(r), "user:" + name}
+	keys := []string{"ip:" + a.clientIP(r), "user:" + name}
 	if a.limiter.blocked(keys...) {
-		log.Printf("登录被限速: 用户 %q (from %s)", name, r.RemoteAddr)
+		log.Printf("登录被限速: 用户 %q (from %s)", name, a.clientIP(r))
 		d.Error = "尝试次数过多，请 1 分钟后再试"
-		a.render(w, http.StatusTooManyRequests, "login.html", d)
+		a.render(w, r, http.StatusTooManyRequests, "login.html", d)
 		return
 	}
 	u, found := a.users.find(name)
@@ -549,13 +607,13 @@ func (a *authServer) postLogin(w http.ResponseWriter, r *http.Request) {
 	a.withSem(func() { ok = verifyPassword(hash, pw) })
 	if !found || !ok {
 		a.limiter.fail(keys...)
-		log.Printf("登录失败: 用户 %q (from %s)", name, r.RemoteAddr)
+		log.Printf("登录失败: 用户 %q (from %s)", name, a.clientIP(r))
 		d.Error = "用户名或密码错误"
-		a.render(w, http.StatusUnauthorized, "login.html", d)
+		a.render(w, r, http.StatusUnauthorized, "login.html", d)
 		return
 	}
 	a.limiter.reset(keys...)
-	log.Printf("登录成功: 用户 %s (from %s)", name, r.RemoteAddr)
+	log.Printf("登录成功: 用户 %s (from %s)", name, a.clientIP(r))
 	a.setSessionCookie(w, r, a.sessions.create(name))
 	a.redirect(w, r, "")
 }
@@ -565,7 +623,7 @@ func (a *authServer) postLogout(w http.ResponseWriter, r *http.Request) {
 		a.sessions.remove(tok)
 	}
 	u, _ := userFromContext(r)
-	log.Printf("登出: 用户 %s (from %s)", u.Name, r.RemoteAddr)
+	log.Printf("登出: 用户 %s (from %s)", u.Name, a.clientIP(r))
 	a.clearSessionCookie(w, r)
 	a.redirect(w, r, "login")
 }
@@ -578,7 +636,7 @@ func (a *authServer) accountPage(u User) pageData {
 
 func (a *authServer) getAccount(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r)
-	a.render(w, http.StatusOK, "account.html", a.accountPage(u))
+	a.render(w, r, http.StatusOK, "account.html", a.accountPage(u))
 }
 
 func (a *authServer) postAccount(w http.ResponseWriter, r *http.Request) {
@@ -592,14 +650,14 @@ func (a *authServer) postAccount(w http.ResponseWriter, r *http.Request) {
 	var ok bool
 	a.withSem(func() { ok = verifyPassword(u.PasswordHash, cur) })
 	if !ok {
-		log.Printf("修改密码失败（当前密码错误）: 用户 %s (from %s)", u.Name, r.RemoteAddr)
+		log.Printf("修改密码失败（当前密码错误）: 用户 %s (from %s)", u.Name, a.clientIP(r))
 		d.Error = "当前密码错误"
-		a.render(w, http.StatusBadRequest, "account.html", d)
+		a.render(w, r, http.StatusBadRequest, "account.html", d)
 		return
 	}
 	if msg := checkNewPassword(pw, r.PostFormValue("confirm")); msg != "" {
 		d.Error = msg
-		a.render(w, http.StatusBadRequest, "account.html", d)
+		a.render(w, r, http.StatusBadRequest, "account.html", d)
 		return
 	}
 	var err error
@@ -610,13 +668,13 @@ func (a *authServer) postAccount(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("修改密码失败: 用户 %s: %v", u.Name, err)
 		d.Error = "保存失败: " + err.Error()
-		a.render(w, http.StatusInternalServerError, "account.html", d)
+		a.render(w, r, http.StatusInternalServerError, "account.html", d)
 		return
 	}
 	a.sessions.revokeUserExcept(u.Name, sessionToken(r))
-	log.Printf("修改密码: 用户 %s (from %s)", u.Name, r.RemoteAddr)
+	log.Printf("修改密码: 用户 %s (from %s)", u.Name, a.clientIP(r))
 	d.Notice = "密码已修改，其它设备上的登录已失效"
-	a.render(w, http.StatusOK, "account.html", d)
+	a.render(w, r, http.StatusOK, "account.html", d)
 }
 
 // ---------- /admin/users ----------
@@ -650,7 +708,7 @@ func (a *authServer) usersResult(w http.ResponseWriter, r *http.Request, errMsg,
 	if errMsg != "" {
 		status = http.StatusBadRequest
 	}
-	a.render(w, status, "users.html", d)
+	a.render(w, r, status, "users.html", d)
 }
 
 func (a *authServer) getUsers(w http.ResponseWriter, r *http.Request) {
@@ -682,7 +740,7 @@ func (a *authServer) postUserAdd(w http.ResponseWriter, r *http.Request) {
 		a.usersResult(w, r, err.Error(), "")
 		return
 	}
-	log.Printf("用户管理: %s 新增用户 %s (admin=%v) (from %s)", me.Name, name, admin, r.RemoteAddr)
+	log.Printf("用户管理: %s 新增用户 %s (admin=%v) (from %s)", me.Name, name, admin, a.clientIP(r))
 	a.usersResult(w, r, "", "已新增用户 "+name)
 }
 
@@ -705,7 +763,7 @@ func (a *authServer) postUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.sessions.revokeUser(name)
-	log.Printf("用户管理: %s 删除用户 %s (from %s)", me.Name, name, r.RemoteAddr)
+	log.Printf("用户管理: %s 删除用户 %s (from %s)", me.Name, name, a.clientIP(r))
 	a.usersResult(w, r, "", "已删除用户 "+name)
 }
 
@@ -734,7 +792,7 @@ func (a *authServer) postUserPassword(w http.ResponseWriter, r *http.Request) {
 	} else {
 		a.sessions.revokeUser(name)
 	}
-	log.Printf("用户管理: %s 重置了用户 %s 的密码 (from %s)", me.Name, name, r.RemoteAddr)
+	log.Printf("用户管理: %s 重置了用户 %s 的密码 (from %s)", me.Name, name, a.clientIP(r))
 	a.usersResult(w, r, "", "已重置用户 "+name+" 的密码")
 }
 
@@ -757,7 +815,7 @@ func (a *authServer) postUserAdmin(w http.ResponseWriter, r *http.Request) {
 		a.usersResult(w, r, err.Error(), "")
 		return
 	}
-	log.Printf("用户管理: %s 将用户 %s 的管理员权限设为 %v (from %s)", me.Name, name, admin, r.RemoteAddr)
+	log.Printf("用户管理: %s 将用户 %s 的管理员权限设为 %v (from %s)", me.Name, name, admin, a.clientIP(r))
 	if admin {
 		a.usersResult(w, r, "", "已将 "+name+" 设为管理员")
 	} else {
@@ -768,10 +826,11 @@ func (a *authServer) postUserAdmin(w http.ResponseWriter, r *http.Request) {
 // ---------- /api/me ----------
 
 func (a *authServer) apiMe(w http.ResponseWriter, r *http.Request) {
+	csrf := a.ensureCSRF(w, r)
 	u, ok := a.currentUser(w, r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"auth": true, "user": nil})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"auth": true, "user": nil, "csrf": csrf})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"auth": true, "user": u.Name, "admin": u.Admin})
+	writeJSON(w, http.StatusOK, map[string]any{"auth": true, "user": u.Name, "admin": u.Admin, "csrf": csrf})
 }

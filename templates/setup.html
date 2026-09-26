@@ -1,6 +1,7 @@
 {{define "content"}}
 <p class="auth-hint">首次使用，请创建管理员账户。</p>
 <form method="post" action="{{.Base}}setup" class="auth-form">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>用户名<input type="text" name="username" value="{{.Username}}" maxlength="32" autocomplete="username" required></label>
   <label>密码<input type="password" name="password" minlength="6" autocomplete="new-password" required autofocus></label>
   <label>确认密码<input type="password" name="confirm" minlength="6" autocomplete="new-password" required></label>

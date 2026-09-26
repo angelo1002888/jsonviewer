@@ -797,6 +797,7 @@
   }, function () { return null; }).then(function (me) {
     if (me === TO_LOGIN) return;
     if (me && me.auth && me.user) {
+      $('csrfField').value = me.csrf || '';
       userMenu.show(me.user, !!me.admin);
       init(me.user);
     } else {

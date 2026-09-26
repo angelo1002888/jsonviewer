@@ -18,7 +18,7 @@
     {{- if .Admin}}
     <a href="{{.Base}}admin/users">用户管理</a>
     {{- end}}
-    <form method="post" action="{{.Base}}logout" class="inline"><button type="submit" class="link">退出登录</button></form>
+    <form method="post" action="{{.Base}}logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="link">退出登录</button></form>
   </div>
   {{- end}}
   <div class="auth-card">

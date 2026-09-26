@@ -39,7 +39,7 @@
           <a href="account">修改密码</a>
           <a href="admin/users" id="menuAdmin" hidden>用户管理</a>
           <span class="ctx-sep"></span>
-          <form method="post" action="logout" id="logoutForm"><button type="submit">退出登录</button></form>
+          <form method="post" action="logout" id="logoutForm"><input type="hidden" name="csrf" id="csrfField"><button type="submit">退出登录</button></form>
         </span>
       </span>
     </header>
