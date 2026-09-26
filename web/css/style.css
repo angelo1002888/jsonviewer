@@ -32,7 +32,7 @@ button, input { font: inherit; color: inherit; }
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--panel-bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
 }
-#leftPanel { flex: 0 0 400px; width: 400px; }
+#leftPanel { flex: 0 0 440px; width: 440px; }
 #gridPanel { flex: 0 0 300px; width: 300px; }
 .panel.center { flex: 1 1 auto; }
 .splitter { flex: 0 0 5px; cursor: col-resize; background: var(--splitter); border-radius: 2px; margin: 0 1px; }
@@ -61,7 +61,7 @@ body.resizing iframe, body.resizing textarea { pointer-events: none; }
 .toolbar button:active { background: var(--btn-active); }
 .toolbar button.icon-btn img { width: 16px; height: 16px; vertical-align: -3px; margin-right: 2px; }
 .toolbar input[type=text] {
-  height: 24px; width: 150px; padding: 0 6px; border: 1px solid var(--btn-border); border-radius: 3px; outline: none;
+  height: 24px; width: 110px; padding: 0 6px; border: 1px solid var(--btn-border); border-radius: 3px; outline: none;
 }
 .toolbar input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,125,221,.15); }
 .search-result { padding: 0 6px; font-weight: bold; color: #c0392b; white-space: nowrap; }
@@ -90,12 +90,12 @@ body.resizing iframe, body.resizing textarea { pointer-events: none; }
 #treeSpacer { position: relative; min-height: 100%; }
 #treeLayer { position: absolute; left: 0; top: 0; min-width: 100%; }
 .tn {
-  height: 18px; line-height: 18px; white-space: nowrap; cursor: pointer;
-  color: #000; font: normal 11px arial, tahoma, helvetica, sans-serif;
+  display: flex; align-items: center; height: 18px; white-space: nowrap; cursor: pointer;
+  color: #000; font: 12px/18px Menlo, Consolas, "DejaVu Sans Mono", "Courier New", monospace;
 }
 .tn:hover { background-color: #eee; }
 .tn.sel, .tn.sel:hover { background-color: #d9e8fb; }
-.tn > span { display: inline-block; width: 16px; height: 18px; vertical-align: top; background-repeat: no-repeat; }
+.tn > span { flex: none; display: block; width: 16px; height: 18px; background-repeat: no-repeat; }
 .tn .tb { background: none; }                                         /* 空白缩进 */
 .tn .tl { background-image: url(../assets/ico/elbow-line.gif); }      /* 竖线缩进 */
 .tn .ec { cursor: pointer; }
@@ -112,8 +112,8 @@ body.resizing iframe, body.resizing textarea { pointer-events: none; }
 .tn .ni.number  { background-image: url(../assets/ico/green.gif); }
 .tn .ni.boolean { background-image: url(../assets/ico/yellow.gif); }
 .tn .ni.null    { background-image: url(../assets/ico/red.gif); }
-.tn a { text-decoration: none; color: #000; user-select: none; }
-.tn a span { padding: 1px 3px 1px 2px; }
+.tn a { display: block; line-height: 18px; text-decoration: none; color: #000; user-select: none; }
+.tn a span { padding: 0 3px 0 2px; }
 .tree-empty { padding: 12px; color: var(--muted); font-size: 12px; }
 
 /* ---------- 右侧属性表 ---------- */
@@ -154,6 +154,15 @@ body.resizing iframe, body.resizing textarea { pointer-events: none; }
 .dialog-footer { padding: 8px 14px; text-align: right; border-top: 1px solid var(--border); background: #fafbfc; }
 .dialog-footer button { height: 26px; padding: 0 16px; border: 1px solid var(--accent); border-radius: 3px; background: var(--accent); color: #fff; cursor: pointer; }
 .dialog-footer button:hover { filter: brightness(1.08); }
+.dialog-footer button + button { margin-left: 8px; }
+.dialog-footer button.secondary { border-color: var(--btn-border); background: var(--btn-bg); color: var(--text); }
+.dialog-footer button.secondary:hover { filter: none; background: var(--btn-hover); border-color: #b9c6d8; }
+.dialog-footer button:disabled { opacity: .6; cursor: default; filter: none; }
+
+/* 修改密码弹窗 */
+.dialog.pwd-dialog { width: 360px; margin: 0; }
+.form-fields { display: flex; flex-direction: column; gap: 10px; font-size: 12px; line-height: 1.4; }
+.form-error { min-height: 17px; color: #c0392b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .toast {
   position: fixed; z-index: 3000; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -188,11 +197,12 @@ body.auth-page { overflow: auto; height: auto; min-height: 100%; }
 .auth-msg.ok { color: #2e7d32; background: #f0f8f0; border-color: #bfe0c1; }
 .auth-form { display: flex; flex-direction: column; gap: 12px; }
 .auth-form.narrow { max-width: 320px; }
-.auth-form label { display: flex; flex-direction: column; gap: 4px; color: var(--header-fg); }
-.auth-page input[type=text], .auth-page input[type=password] {
+.auth-form label, .form-fields label { display: flex; flex-direction: column; gap: 4px; color: var(--header-fg); }
+/* 表单输入框：认证页与查看器内弹窗（.form-fields）共用 */
+.auth-page input[type=text], .auth-page input[type=password], .form-fields input[type=password] {
   height: 28px; padding: 0 8px; border: 1px solid var(--btn-border); border-radius: 3px; outline: none; background: #fff;
 }
-.auth-page input[type=text]:focus, .auth-page input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,125,221,.15); }
+.auth-page input[type=text]:focus, .auth-page input[type=password]:focus, .form-fields input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,125,221,.15); }
 .auth-page button:not(.link) {
   height: 26px; padding: 0 12px; border: 1px solid var(--btn-border); border-radius: 3px;
   background: var(--btn-bg); cursor: pointer; white-space: nowrap;
@@ -241,9 +251,9 @@ body.auth-page { overflow: auto; height: auto; min-height: 100%; }
   font-size: 12px; line-height: 1.5; font-weight: normal; user-select: none;
 }
 .user-drop .ctx-sep { display: block; }
-.user-drop a, .user-drop form button {
+.user-drop a, .user-drop button {
   display: block; width: 100%; padding: 5px 14px; color: var(--text); text-decoration: none; white-space: nowrap; text-align: left;
 }
 .user-drop form { margin: 0; }
-.user-drop form button { height: auto; line-height: inherit; border: 0; border-radius: 0; background: none; font-size: 12px; cursor: pointer; }
-.user-drop a:hover, .user-drop form button:hover { background: var(--btn-hover); color: var(--accent); }
+.user-drop button { height: auto; line-height: inherit; border: 0; border-radius: 0; background: none; font-size: 12px; cursor: pointer; }
+.user-drop a:hover, .user-drop button:hover { background: var(--btn-hover); color: var(--accent); }

@@ -431,3 +431,77 @@ func TestUserStoreReloadIfChanged(t *testing.T) {
 		t.Error("in-memory users lost after corrupt/missing file")
 	}
 }
+
+func TestAPIPassword(t *testing.T) {
+	users, err := loadUsers(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := users.setupAdmin("admin", "password1"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Auth: true, BasePath: "/"}
+	a, err := newAuthServer(cfg, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHandler(sub, cfg, a)
+	const csrf = "test-csrf-token"
+	sess, other := a.sessions.create("admin"), a.sessions.create("admin")
+	post := func(session string, form url.Values) *httptest.ResponseRecorder {
+		form.Set("csrf", csrf)
+		r := httptest.NewRequest("POST", "/api/password", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: csrf})
+		if session != "" {
+			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	form := func(cur, pw, confirm string) url.Values {
+		return url.Values{"current": {cur}, "password": {pw}, "confirm": {confirm}}
+	}
+
+	if rec := post("", form("password1", "password2", "password2")); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("Content-Type"), "json") {
+		t.Errorf("unauthenticated: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	for _, c := range []struct{ cur, pw, confirm, msg string }{
+		{"wrong", "password2", "password2", "当前密码错误"},
+		{"password1", "12345", "12345", "新密码至少 6 位"},
+		{"password1", "password2", "password3", "两次输入的新密码不一致"},
+	} {
+		rec := post(sess, form(c.cur, c.pw, c.confirm))
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Body.String(), `"ok":false`) || !strings.Contains(rec.Body.String(), c.msg) {
+			t.Errorf("%s: %d %s", c.msg, rec.Code, rec.Body.String())
+		}
+	}
+	rec := post(sess, form("password1", "password2", "password2"))
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"ok":true}` || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("success: %d %s", rec.Code, rec.Body.String())
+	}
+	u, _ := users.find("admin")
+	if !verifyPassword(u.PasswordHash, "password2") {
+		t.Error("password not updated")
+	}
+	if _, _, ok := a.sessions.get(sess); !ok {
+		t.Error("current session revoked")
+	}
+	if _, _, ok := a.sessions.get(other); ok {
+		t.Error("other session not revoked")
+	}
+
+	// 独立页面已移除
+	r := httptest.NewRequest("GET", "/account", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sess})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /account: %d", rec.Code)
+	}
+}

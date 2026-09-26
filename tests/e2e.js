@@ -71,9 +71,9 @@ async function authSuite(browser) {
     await page.setViewport({ width: 1400, height: 800 });
     const errors = [];
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-    // 纯文本 403 页没有 <link rel=icon>，Chrome 会自动请求 /favicon.ico（404），同样不算
+    // 纯文本 403 页没有 <link rel=icon>，Chrome 会自动请求 /favicon.ico（404）；已移除的 /account 预期 404，同样不算
     page.on('console', m => {
-      if (m.type() !== 'error' || EXPECTED_HTTP_ERR.test(m.text()) || /\/favicon\.ico$/.test((m.location() || {}).url || '')) return;
+      if (m.type() !== 'error' || EXPECTED_HTTP_ERR.test(m.text()) || /\/(favicon\.ico|account)$/.test((m.location() || {}).url || '')) return;
       errors.push('console: ' + m.text());
     });
     const base = 'http://' + lanIPv4() + ':' + port;
@@ -120,14 +120,38 @@ async function authSuite(browser) {
     await page.goto(base + '/setup', { waitUntil: 'networkidle0' });
     check('再次访问 /setup 被重定向', where() !== '/setup', where());
 
-    // 4. 修改密码
-    await page.goto(base + '/account', { waitUntil: 'networkidle0' });
-    let res = await submitForm(page, 'form.auth-form', { current: 'wrong-pass', password: 'adminpass2', confirm: 'adminpass2' });
-    let msg = await page.$eval('.auth-msg', e => e.className + ':' + e.textContent).catch(() => '');
-    check('当前密码错误被拒绝', res.status() === 400 && /error:.*当前密码错误/.test(msg), res.status() + ' ' + msg);
-    res = await submitForm(page, 'form.auth-form', { current: 'adminpass1', password: 'adminpass2', confirm: 'adminpass2' });
-    msg = await page.$eval('.auth-msg', e => e.className + ':' + e.textContent).catch(() => '');
-    check('当前密码正确时修改成功', res.status() === 200 && /\bok:/.test(msg), msg);
+    // 4. 修改密码（查看器内弹窗）；独立的 /account 页面已移除
+    let msg;
+    let res = await page.goto(base + '/account', { waitUntil: 'networkidle0' });
+    check('GET /account 已移除（非 200）', res.status() !== 200, res.status());
+    await page.goto(base + '/', { waitUntil: 'networkidle0' });
+    await page.waitForSelector('#userMenu:not([hidden])', { timeout: 3000 });
+    await page.click('#userBtn');
+    await page.click('#menuPassword');
+    await page.waitForSelector('#pwdMask:not([hidden])', { timeout: 3000 });
+    const pwdOpen = await page.evaluate(() => [document.getElementById('userDrop').hidden, document.activeElement && document.activeElement.id, document.getElementById('pwdTitle').textContent]);
+    check('点"修改密码"打开弹窗并聚焦当前密码框', pwdOpen[0] === true && pwdOpen[1] === 'pwdCurrent' && pwdOpen[2] === '修改密码', pwdOpen.join(','));
+    const fillPwd = (cur, pw, cf) => page.evaluate((a, b, c) => {
+      document.getElementById('pwdCurrent').value = a;
+      document.getElementById('pwdNew').value = b;
+      document.getElementById('pwdConfirm').value = c;
+    }, cur, pw, cf);
+    const submitPwd = async () => (await Promise.all([page.waitForResponse(r => r.url().endsWith('/api/password') && r.request().method() === 'POST'), page.click('#pwdOk')]))[0];
+    await fillPwd('wrong-pass', 'adminpass2', 'adminpass2');
+    let pr = await submitPwd();
+    await page.waitForFunction(() => document.getElementById('pwdError').textContent !== '', { timeout: 3000 }).catch(() => {});
+    let pst = await page.evaluate(() => [document.getElementById('pwdMask').hidden, document.getElementById('pwdError').textContent, document.getElementById('pwdCurrent').value]);
+    check('当前密码错误：400，弹窗内显示错误且不关闭、保留输入', pr.status() === 400 && pst[0] === false && pst[1] === '当前密码错误' && pst[2] === 'wrong-pass', pr.status() + ' ' + pst.join(','));
+    await fillPwd('adminpass1', 'adminpass2', 'adminpass2');
+    pr = await submitPwd();
+    const prBody = await pr.json().catch(() => null);
+    await page.waitForSelector('#pwdMask[hidden]', { timeout: 3000 }).catch(() => {});
+    pst = await page.evaluate(() => [document.getElementById('pwdMask').hidden, document.getElementById('toast').hidden, document.getElementById('toast').textContent]);
+    check('当前密码正确：弹窗关闭并提示成功', pr.status() === 200 && prBody && prBody.ok === true && pst[0] === true && pst[1] === false && pst[2] === '密码已修改，其它设备需重新登录', pr.status() + ' ' + pst.join(','));
+    await page.click('#userBtn');
+    await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('#logoutForm button')]);
+    res = await submitForm(page, 'form', { username: 'admin', password: 'adminpass2' });
+    check('退出后用新密码登录成功', where() === '/', res.status() + ' ' + where());
 
     // 5. 用户管理：新增 bob；不能删除自己
     await page.goto(base + '/admin/users', { waitUntil: 'networkidle0' });

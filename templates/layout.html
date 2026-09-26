@@ -14,7 +14,6 @@
     <span>当前用户：<b>{{.User}}</b>{{if .Admin}}（管理员）{{end}}</span>
     <span class="fill"></span>
     <a href="{{.Base}}">返回查看器</a>
-    <a href="{{.Base}}account">账户设置</a>
     {{- if .Admin}}
     <a href="{{.Base}}admin/users">用户管理</a>
     {{- end}}

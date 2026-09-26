@@ -317,7 +317,7 @@ func newAuthServer(cfg Config, users *userStore) (*authServer, error) {
 		dummyHash: hashPassword("jsonviewer-dummy-password"),
 		tmpl:      make(map[string]*template.Template),
 	}
-	for _, page := range []string{"login.html", "setup.html", "account.html", "users.html", "message.html"} {
+	for _, page := range []string{"login.html", "setup.html", "users.html", "message.html"} {
 		t, err := template.New("").ParseFS(templatesFS, "templates/layout.html", "templates/"+page)
 		if err != nil {
 			return nil, err
@@ -340,14 +340,13 @@ func (a *authServer) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", a.getLogin)
 	mux.HandleFunc("POST /login", a.postLogin)
 	mux.HandleFunc("POST /logout", a.postLogout)
-	mux.HandleFunc("GET /account", a.getAccount)
-	mux.HandleFunc("POST /account", a.postAccount)
 	mux.HandleFunc("GET /admin/users", a.adminOnly(a.getUsers))
 	mux.HandleFunc("POST /admin/users/add", a.adminOnly(a.postUserAdd))
 	mux.HandleFunc("POST /admin/users/delete", a.adminOnly(a.postUserDelete))
 	mux.HandleFunc("POST /admin/users/password", a.adminOnly(a.postUserPassword))
 	mux.HandleFunc("POST /admin/users/admin", a.adminOnly(a.postUserAdmin))
 	mux.HandleFunc("GET /api/me", a.apiMe)
+	mux.HandleFunc("POST /api/password", a.apiPassword)
 }
 
 // apiMeDisabled 用于未启用登录验证时。
@@ -453,6 +452,11 @@ func (a *authServer) requireLogin(next http.Handler) http.Handler {
 		}
 		u, ok := a.currentUser(w, r)
 		if !ok {
+			// 接口请求返回 JSON 401（由前端跳转登录页），不做重定向
+			if strings.HasPrefix(p, "/api/") {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "未登录或登录已过期"})
+				return
+			}
 			if a.users.count() == 0 {
 				a.redirect(w, r, "setup")
 			} else {
@@ -628,55 +632,6 @@ func (a *authServer) postLogout(w http.ResponseWriter, r *http.Request) {
 	a.redirect(w, r, "login")
 }
 
-// ---------- /account ----------
-
-func (a *authServer) accountPage(u User) pageData {
-	return pageData{Title: "账户设置", Wide: true, User: u.Name, Admin: u.Admin}
-}
-
-func (a *authServer) getAccount(w http.ResponseWriter, r *http.Request) {
-	u, _ := userFromContext(r)
-	a.render(w, r, http.StatusOK, "account.html", a.accountPage(u))
-}
-
-func (a *authServer) postAccount(w http.ResponseWriter, r *http.Request) {
-	if !parseForm(w, r) {
-		return
-	}
-	u, _ := userFromContext(r)
-	d := a.accountPage(u)
-	cur := r.PostFormValue("current")
-	pw := r.PostFormValue("password")
-	var ok bool
-	a.withSem(func() { ok = verifyPassword(u.PasswordHash, cur) })
-	if !ok {
-		log.Printf("修改密码失败（当前密码错误）: 用户 %s (from %s)", u.Name, a.clientIP(r))
-		d.Error = "当前密码错误"
-		a.render(w, r, http.StatusBadRequest, "account.html", d)
-		return
-	}
-	if msg := checkNewPassword(pw, r.PostFormValue("confirm")); msg != "" {
-		d.Error = msg
-		a.render(w, r, http.StatusBadRequest, "account.html", d)
-		return
-	}
-	var err error
-	a.withSem(func() { err = a.users.setPassword(u.Name, pw) })
-	if err == nil {
-		err = a.users.save()
-	}
-	if err != nil {
-		log.Printf("修改密码失败: 用户 %s: %v", u.Name, err)
-		d.Error = "保存失败: " + err.Error()
-		a.render(w, r, http.StatusInternalServerError, "account.html", d)
-		return
-	}
-	a.sessions.revokeUserExcept(u.Name, sessionToken(r))
-	log.Printf("修改密码: 用户 %s (from %s)", u.Name, a.clientIP(r))
-	d.Notice = "密码已修改，其它设备上的登录已失效"
-	a.render(w, r, http.StatusOK, "account.html", d)
-}
-
 // ---------- /admin/users ----------
 
 func (a *authServer) usersPage(u User) pageData {
@@ -833,4 +788,50 @@ func (a *authServer) apiMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"auth": true, "user": u.Name, "admin": u.Admin, "csrf": csrf})
+}
+
+// ---------- /api/password ----------
+
+// apiPassword 供查看器内"修改密码"弹窗使用：校验当前密码后写入新密码，并撤销该用户的其它会话。
+func (a *authServer) apiPassword(w http.ResponseWriter, r *http.Request) {
+	if !parseForm(w, r) {
+		return
+	}
+	u, _ := userFromContext(r)
+	fail := func(status int, msg string) {
+		writeJSON(w, status, map[string]any{"ok": false, "error": msg})
+	}
+	cur := r.PostFormValue("current")
+	pw := r.PostFormValue("password")
+	var ok bool
+	a.withSem(func() { ok = verifyPassword(u.PasswordHash, cur) })
+	if !ok {
+		log.Printf("修改密码失败（当前密码错误）: 用户 %s (from %s)", u.Name, a.clientIP(r))
+		fail(http.StatusBadRequest, "当前密码错误")
+		return
+	}
+	switch {
+	case len(pw) < minPasswordLen:
+		fail(http.StatusBadRequest, "新密码至少 "+strconv.Itoa(minPasswordLen)+" 位")
+		return
+	case len(pw) > maxPasswordLen:
+		fail(http.StatusBadRequest, errPasswordTooLong.Error())
+		return
+	case pw != r.PostFormValue("confirm"):
+		fail(http.StatusBadRequest, "两次输入的新密码不一致")
+		return
+	}
+	var err error
+	a.withSem(func() { err = a.users.setPassword(u.Name, pw) })
+	if err == nil {
+		err = a.users.save()
+	}
+	if err != nil {
+		log.Printf("修改密码失败: 用户 %s: %v", u.Name, err)
+		fail(http.StatusInternalServerError, "保存失败: "+err.Error())
+		return
+	}
+	a.sessions.revokeUserExcept(u.Name, sessionToken(r))
+	log.Printf("修改密码: 用户 %s (from %s)", u.Name, a.clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -12,7 +12,7 @@ Self-hosted online JSON viewer that replicates the three-pane layout and feature
 - `Makefile`: `make build` / `make release`. Docs: `README.md` (English) and `README_CN.md` (Chinese); keep both in sync.
 
 ## Conventions
-- The tree view (middle pane) keeps the original ExtJS look: 18px rows, 11px arial, elbow lines and plus/minus icons, selection color #d9e8fb. Everything else is a clean light theme and may be restyled freely.
+- The tree view (middle pane) keeps the ExtJS structure: 18px rows, elbow lines and plus/minus icons, selection color #d9e8fb; text is 12px monospace, vertically centered with the icons (user preference, 2026-09-26). Everything else is a clean light theme and may be restyled freely.
 - Performance is a hard requirement: the tree must stay virtualized with lazily created nodes; the editor is CodeMirror (a textarea is unusable on large text); parsing uses the native JSON.parse fast path and only falls back to big-number protection when a 16+ digit number is present.
 - Go: standard library only. Frontend: no frameworks, no CDN.
 - Verification: `make build`, run the binary, then run the headless-Chrome tests (puppeteer-core + local google-chrome).

@@ -36,7 +36,7 @@
       <span id="userMenu" class="user-menu" hidden>
         <button type="button" id="userBtn" aria-haspopup="true" aria-expanded="false"><span id="userName"></span><span class="caret"></span></button>
         <span id="userDrop" class="user-drop" hidden>
-          <a href="account">修改密码</a>
+          <button type="button" id="menuPassword">修改密码</button>
           <a href="admin/users" id="menuAdmin" hidden>用户管理</a>
           <span class="ctx-sep"></span>
           <form method="post" action="logout" id="logoutForm"><input type="hidden" name="csrf" id="csrfField"><button type="submit">退出登录</button></form>
@@ -94,6 +94,24 @@
     <div class="dialog-body" id="dialogBody"></div>
     <div class="dialog-footer"><button type="button" id="dialogOk">确定</button></div>
   </div>
+</div>
+
+<!-- 修改密码 -->
+<div id="pwdMask" class="dialog-mask" hidden>
+  <form class="dialog pwd-dialog" id="pwdForm" role="dialog" aria-modal="true" aria-labelledby="pwdTitle" novalidate>
+    <div class="dialog-title" id="pwdTitle">修改密码</div>
+    <div class="dialog-body form-fields">
+      <input type="text" name="username" id="pwdUser" autocomplete="username" hidden>
+      <label>当前密码<input type="password" name="current" id="pwdCurrent" autocomplete="current-password"></label>
+      <label>新密码<input type="password" name="password" id="pwdNew" autocomplete="new-password"></label>
+      <label>确认新密码<input type="password" name="confirm" id="pwdConfirm" autocomplete="new-password"></label>
+      <div class="form-error" id="pwdError" role="alert"></div>
+    </div>
+    <div class="dialog-footer">
+      <button type="button" class="secondary" id="pwdCancel">取消</button>
+      <button type="submit" id="pwdOk">确定</button>
+    </div>
+  </form>
 </div>
 
 <div id="toast" class="toast" hidden></div>

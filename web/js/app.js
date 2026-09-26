@@ -393,7 +393,7 @@
     if (!ctxMenu.el.hidden && !ctxMenu.el.contains(e.target)) ctxMenu.hide();
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { ctxMenu.hide(); dialog.hide(); }
+    if (e.key === 'Escape') { ctxMenu.hide(); dialog.hide(); pwdDialog.hide(); }
   });
   tree.body.addEventListener('scroll', function () { ctxMenu.hide(); });
   window.addEventListener('blur', function () { ctxMenu.hide(); });
@@ -764,6 +764,57 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') userMenu.hide(); });
   window.addEventListener('blur', function () { userMenu.hide(); });
   window.addEventListener('resize', function () { userMenu.hide(); });
+  $('menuPassword').addEventListener('click', function () { userMenu.hide(); pwdDialog.show(); });
+
+  /* 修改密码弹窗：POST api/password，成功后其它会话失效 */
+  var pwdDialog = {
+    mask: $('pwdMask'), form: $('pwdForm'), err: $('pwdError'), busy: false,
+    show: function () {
+      this.form.reset();
+      $('pwdUser').value = $('userName').textContent;
+      this.err.textContent = this.err.title = '';
+      this.setBusy(false);
+      this.mask.hidden = false;
+      $('pwdCurrent').focus();
+    },
+    hide: function () { if (!this.busy) this.mask.hidden = true; },
+    setBusy: function (b) {
+      this.busy = b;
+      $('pwdOk').disabled = b;
+      $('pwdCancel').disabled = b;
+    },
+    submit: function () {
+      var self = this;
+      if (self.busy) return;
+      var fd = new FormData(self.form);
+      fd.delete('username');
+      fd.append('csrf', $('csrfField').value);
+      self.err.textContent = '';
+      self.setBusy(true);
+      // 以 urlencoded 提交：服务端 CSRF 校验只解析普通表单
+      fetch('api/password', { method: 'POST', body: new URLSearchParams(fd), credentials: 'same-origin', cache: 'no-store' }).then(function (res) {
+        if (res.status === 401) { location.href = 'login'; return null; }
+        return res.json().then(function (j) { return j; }, function () {
+          return { ok: false, error: '请求失败（' + res.status + '），请刷新页面后重试' };
+        });
+      }, function () {
+        return { ok: false, error: '网络错误，请稍后重试' };
+      }).then(function (r) {
+        self.setBusy(false);
+        if (!r) return;
+        if (r.ok) {
+          self.hide();
+          toast('密码已修改，其它设备需重新登录');
+        } else {
+          self.err.textContent = r.error || '修改失败';
+          self.err.title = self.err.textContent;
+        }
+      });
+    }
+  };
+  pwdDialog.form.addEventListener('submit', function (e) { e.preventDefault(); pwdDialog.submit(); });
+  $('pwdCancel').addEventListener('click', function () { pwdDialog.hide(); });
+
   $('logoutForm').addEventListener('submit', function () {
     try { if (STORAGE_KEY) sessionStorage.removeItem(STORAGE_KEY); } catch (e) { /* 忽略 */ }
   });
