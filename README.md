@@ -43,23 +43,26 @@ npm run test:e2e       # 功能 + 大 JSON 性能检查；BIG=0 npm run test:e2e
 ./jsonviewer -h
 ```
 
+Go 的 `flag` 包对单横线和双横线一视同仁（`-listen` 与 `--listen` 等价），下表统一用 `-短, --长` 的形式列出。
+
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-listen` | 监听地址，如 `:8080` 或 `127.0.0.1:8080` | `:8080` |
-| `-base-path` | 反向代理挂载子路径时使用，如 `/jsonviewer` | `/` |
-| `-access-log` | 是否打印访问日志 | `false` |
-| `-tls-cert` | TLS 证书文件；与 `-tls-key` 同时设置后启用 HTTPS | 空（不启用） |
-| `-tls-key` | TLS 私钥文件 | 空（不启用） |
-| `-config` | 配置文件路径（`key = value` 格式） | 空（不使用配置文件） |
-| `-version` | 显示版本号并退出 | - |
-| `-example-config` | 输出一份示例配置文件内容并退出 | - |
+| `-l, --listen` | 监听地址，如 `:8080` 或 `127.0.0.1:8080` | `:8080` |
+| `-b, --base-path` | 反向代理挂载子路径时使用，如 `/jsonviewer` | `/` |
+| `-a, --access-log` | 是否打印访问日志 | `false` |
+| `--tls-cert`（无短名） | TLS 证书文件；与 `--tls-key` 同时设置后启用 HTTPS | 空（不启用） |
+| `--tls-key`（无短名） | TLS 私钥文件 | 空（不启用） |
+| `-c, --config` | 配置文件路径（`key = value` 格式） | 空（不使用配置文件） |
+| `-v, --version` | 显示版本号并退出 | - |
+| `-e, --example-config` | 输出一份示例配置文件内容并退出 | - |
+| `-h, --help` | 显示帮助并退出 | - |
 
-**优先级**：命令行参数 > 配置文件 > 内置默认值。也就是说，配置文件里写的值可以被同名命令行参数覆盖；`-tls-cert` 和 `-tls-key` 必须同时设置或同时不设置，否则启动会报错退出。
+**优先级**：命令行参数 > 配置文件 > 内置默认值。也就是说，配置文件里写的值可以被同名命令行参数覆盖；`--tls-cert` 和 `--tls-key` 必须同时设置或同时不设置，否则启动会报错退出。
 
 可以用以下命令生成一份带注释的配置文件模板：
 
 ```bash
-./jsonviewer -example-config > jsonviewer.conf
+./jsonviewer --example-config > jsonviewer.conf
 ```
 
 生成的内容形如：
@@ -82,10 +85,10 @@ access_log = false
 # tls_key  = /etc/jsonviewer/server.key
 ```
 
-然后用 `-config` 指定该文件启动：
+然后用 `--config` 指定该文件启动：
 
 ```bash
-./jsonviewer -config jsonviewer.conf
+./jsonviewer --config jsonviewer.conf
 ```
 
 服务支持优雅退出：收到 `SIGINT` / `SIGTERM` 后会在 5 秒超时内完成正在进行的请求再退出。
@@ -109,7 +112,7 @@ access_log = false
 
    ```bash
    sudo mkdir -p /etc/jsonviewer
-   jsonviewer -example-config | sudo tee /etc/jsonviewer/jsonviewer.conf
+   jsonviewer --example-config | sudo tee /etc/jsonviewer/jsonviewer.conf
    sudo vim /etc/jsonviewer/jsonviewer.conf   # 按需修改 listen / base_path 等
    ```
 
@@ -155,7 +158,7 @@ location /jsonviewer/ {
 }
 ```
 
-**关于剪贴板复制**：浏览器的 Clipboard API（`navigator.clipboard`）只在 HTTPS 或 `localhost` 环境下可用。如果通过 HTTP 反向代理对外访问（非 `localhost`），页面会自动降级使用 `document.execCommand('copy')` 方案，复制功能依然可用，但建议尽量配置 HTTPS（见上文 `-tls-cert` / `-tls-key` 参数）以获得更好的兼容性。
+**关于剪贴板复制**：浏览器的 Clipboard API（`navigator.clipboard`）只在 HTTPS 或 `localhost` 环境下可用。如果通过 HTTP 反向代理对外访问（非 `localhost`），页面会自动降级使用 `document.execCommand('copy')` 方案，复制功能依然可用，但建议尽量配置 HTTPS（见上文 `--tls-cert` / `--tls-key` 参数）以获得更好的兼容性。
 
 ## 重建前端依赖（可选）
 

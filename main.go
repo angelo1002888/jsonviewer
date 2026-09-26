@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -127,19 +128,47 @@ func main() {
 		configPath    string
 		showVersion   bool
 		exampleOnly   bool
-		flagListen    = flag.String("listen", cfg.Listen, "监听地址，例如 :8080 或 127.0.0.1:8080")
-		flagBasePath  = flag.String("base-path", cfg.BasePath, "反向代理子路径，例如 /jsonviewer")
-		flagAccessLog = flag.Bool("access-log", cfg.AccessLog, "打印访问日志")
-		flagTLSCert   = flag.String("tls-cert", "", "TLS 证书文件（与 -tls-key 同时使用启用 HTTPS）")
-		flagTLSKey    = flag.String("tls-key", "", "TLS 私钥文件")
+		flagListen    string
+		flagBasePath  string
+		flagAccessLog bool
+		flagTLSCert   string
+		flagTLSKey    string
 	)
-	flag.StringVar(&configPath, "config", "", "配置文件路径（key = value 格式）")
-	flag.BoolVar(&showVersion, "version", false, "显示版本并退出")
-	flag.BoolVar(&exampleOnly, "example-config", false, "输出示例配置文件并退出")
+	// 长短名绑定同一个变量；flag 包同时接受 -name 与 --name。
+	for _, name := range []string{"l", "listen"} {
+		flag.StringVar(&flagListen, name, cfg.Listen, "监听地址")
+	}
+	for _, name := range []string{"b", "base-path"} {
+		flag.StringVar(&flagBasePath, name, cfg.BasePath, "反向代理子路径")
+	}
+	for _, name := range []string{"a", "access-log"} {
+		flag.BoolVar(&flagAccessLog, name, cfg.AccessLog, "打印访问日志")
+	}
+	flag.StringVar(&flagTLSCert, "tls-cert", "", "TLS 证书文件")
+	flag.StringVar(&flagTLSKey, "tls-key", "", "TLS 私钥文件")
+	for _, name := range []string{"c", "config"} {
+		flag.StringVar(&configPath, name, "", "配置文件路径")
+	}
+	for _, name := range []string{"v", "version"} {
+		flag.BoolVar(&showVersion, name, false, "显示版本并退出")
+	}
+	for _, name := range []string{"e", "example-config"} {
+		flag.BoolVar(&exampleOnly, name, false, "输出示例配置文件并退出")
+	}
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "用法: %s [参数]\n\n", os.Args[0])
-		flag.PrintDefaults()
-		fmt.Fprintln(os.Stderr, "\n优先级：命令行参数 > 配置文件 > 默认值")
+		fmt.Fprintf(os.Stderr, "用法: %s [参数]\n\n", filepath.Base(os.Args[0]))
+		fmt.Fprint(os.Stderr, `  -l, --listen <addr>       监听地址，例如 :8080 或 127.0.0.1:8080（默认 :8080）
+  -b, --base-path <path>    反向代理子路径，例如 /jsonviewer（默认 /）
+  -a, --access-log          打印访问日志
+      --tls-cert <file>     TLS 证书文件（与 --tls-key 同时使用启用 HTTPS）
+      --tls-key <file>      TLS 私钥文件
+  -c, --config <file>       配置文件路径（key = value 格式）
+  -e, --example-config      输出示例配置文件并退出
+  -v, --version             显示版本并退出
+  -h, --help                显示本帮助
+
+优先级：命令行参数 > 配置文件 > 默认值
+`)
 	}
 	flag.Parse()
 
@@ -158,19 +187,20 @@ func main() {
 			log.Fatalf("读取配置文件失败: %v", err)
 		}
 	}
-	// 2. 命令行中显式指定的参数覆盖配置文件
+	// 2. 命令行中显式指定的参数覆盖配置文件（短名与长名指向同一个设置函数）
+	setListen := func() { cfg.Listen = flagListen }
+	setBasePath := func() { cfg.BasePath = flagBasePath }
+	setAccessLog := func() { cfg.AccessLog = flagAccessLog }
+	overrides := map[string]func(){
+		"l": setListen, "listen": setListen,
+		"b": setBasePath, "base-path": setBasePath,
+		"a": setAccessLog, "access-log": setAccessLog,
+		"tls-cert": func() { cfg.TLSCert = flagTLSCert },
+		"tls-key":  func() { cfg.TLSKey = flagTLSKey },
+	}
 	flag.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "listen":
-			cfg.Listen = *flagListen
-		case "base-path":
-			cfg.BasePath = *flagBasePath
-		case "access-log":
-			cfg.AccessLog = *flagAccessLog
-		case "tls-cert":
-			cfg.TLSCert = *flagTLSCert
-		case "tls-key":
-			cfg.TLSKey = *flagTLSKey
+		if set, ok := overrides[f.Name]; ok {
+			set()
 		}
 	})
 	cfg.BasePath = normalizeBasePath(cfg.BasePath)
