@@ -10,12 +10,13 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false   # 仅标准库，没有 go.sum，关闭依赖缓存以消除警告
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt 未格式化的文件"; exit 1; }
       - name: go vet

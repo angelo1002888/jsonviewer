@@ -10,12 +10,13 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false   # 仅标准库，没有 go.sum，关闭依赖缓存以消除警告
       - name: build binaries
         env:
           VERSION: ${{ github.ref_name }}
@@ -32,7 +33,7 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS)
           ls -la dist
       - name: create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
