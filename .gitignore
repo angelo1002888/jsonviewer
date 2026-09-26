@@ -14,6 +14,7 @@ npm-debug.log*
 *.log
 *.pid
 /jsonviewer.conf
+/users.json
 *.crt
 *.key
 *.pem

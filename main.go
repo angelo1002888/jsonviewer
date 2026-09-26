@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -33,6 +34,8 @@ type Config struct {
 	AccessLog bool   // 是否打印访问日志
 	TLSCert   string // 证书文件；与 TLSKey 同时设置则启用 HTTPS
 	TLSKey    string
+	Auth      bool   // 是否启用登录验证
+	UsersFile string // 用户文件路径（启用登录验证时使用）
 }
 
 func defaultConfig() Config {
@@ -54,6 +57,12 @@ access_log = false
 # 同时设置证书和私钥后启用 HTTPS（浏览器剪贴板 API 需要 HTTPS 或 localhost）
 # tls_cert = /etc/jsonviewer/server.crt
 # tls_key  = /etc/jsonviewer/server.key
+
+# 登录验证（true / false）。启用后首次访问进入 /setup 设置管理员
+# auth = true
+
+# 用户文件；不设 users_file 时默认为配置文件同目录下的 users.json
+# users_file = /etc/jsonviewer/users.json
 `
 
 // loadConfigFile 读取 key = value 格式的配置文件。
@@ -101,6 +110,14 @@ func applyOption(cfg *Config, key, val string) error {
 		cfg.TLSCert = val
 	case "tls_key":
 		cfg.TLSKey = val
+	case "auth":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("auth 需要 true/false: %q", val)
+		}
+		cfg.Auth = b
+	case "users_file":
+		cfg.UsersFile = val
 	default:
 		return fmt.Errorf("未知配置项 %q", key)
 	}
@@ -133,6 +150,9 @@ func main() {
 		flagAccessLog bool
 		flagTLSCert   string
 		flagTLSKey    string
+		flagAuth      bool
+		flagUsersFile string
+		resetUser     string
 	)
 	// 长短名绑定同一个变量；flag 包同时接受 -name 与 --name。
 	for _, name := range []string{"l", "listen"} {
@@ -146,6 +166,9 @@ func main() {
 	}
 	flag.StringVar(&flagTLSCert, "tls-cert", "", "TLS 证书文件")
 	flag.StringVar(&flagTLSKey, "tls-key", "", "TLS 私钥文件")
+	flag.BoolVar(&flagAuth, "auth", false, "启用登录验证")
+	flag.StringVar(&flagUsersFile, "users-file", "", "用户文件路径")
+	flag.StringVar(&resetUser, "reset-password", "", "重置指定用户的密码并退出")
 	for _, name := range []string{"c", "config"} {
 		flag.StringVar(&configPath, name, "", "配置文件路径")
 	}
@@ -162,6 +185,10 @@ func main() {
   -a, --access-log          打印访问日志
       --tls-cert <file>     TLS 证书文件（与 --tls-key 同时使用启用 HTTPS）
       --tls-key <file>      TLS 私钥文件
+      --auth                启用登录验证（首次访问进入 /setup 设置管理员）
+      --users-file <file>   用户文件（默认为配置文件同目录下的 users.json）
+      --reset-password <user>
+                            重置该用户的密码（新密码从标准输入读取）并退出
   -c, --config <file>       配置文件路径（key = value 格式）
   -e, --example-config      输出示例配置文件并退出
   -v, --version             显示版本并退出
@@ -195,8 +222,10 @@ func main() {
 		"l": setListen, "listen": setListen,
 		"b": setBasePath, "base-path": setBasePath,
 		"a": setAccessLog, "access-log": setAccessLog,
-		"tls-cert": func() { cfg.TLSCert = flagTLSCert },
-		"tls-key":  func() { cfg.TLSKey = flagTLSKey },
+		"tls-cert":   func() { cfg.TLSCert = flagTLSCert },
+		"tls-key":    func() { cfg.TLSKey = flagTLSKey },
+		"auth":       func() { cfg.Auth = flagAuth },
+		"users-file": func() { cfg.UsersFile = flagUsersFile },
 	}
 	flag.Visit(func(f *flag.Flag) {
 		if set, ok := overrides[f.Name]; ok {
@@ -206,6 +235,21 @@ func main() {
 	cfg.BasePath = normalizeBasePath(cfg.BasePath)
 	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
 		log.Fatal("tls_cert 与 tls_key 必须同时设置")
+	}
+	if cfg.UsersFile == "" {
+		if configPath != "" {
+			cfg.UsersFile = filepath.Join(filepath.Dir(configPath), "users.json")
+		} else {
+			cfg.UsersFile = "users.json"
+		}
+	}
+
+	if resetUser != "" {
+		if err := resetPassword(cfg.UsersFile, resetUser); err != nil {
+			fmt.Fprintln(os.Stderr, "错误:", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if err := run(cfg); err != nil {
@@ -218,7 +262,23 @@ func run(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	handler := newHandler(sub, cfg)
+	var auth *authServer
+	if cfg.Auth {
+		users, err := loadUsers(cfg.UsersFile)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(cfg.UsersFile); errors.Is(err, os.ErrNotExist) {
+			// 立即写入空结构：目录不可写时在启动阶段就失败，而不是等到 /setup。
+			if err := users.save(); err != nil {
+				return fmt.Errorf("auth 已启用但无法写入 %s: %w", cfg.UsersFile, err)
+			}
+		}
+		if auth, err = newAuthServer(cfg, users); err != nil {
+			return err
+		}
+	}
+	handler := newHandler(sub, cfg, auth)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -239,6 +299,9 @@ func run(cfg Config) error {
 		scheme = "https"
 	}
 	log.Printf("jsonviewer %s 已启动: %s://%s%s", version, scheme, displayAddr(ln.Addr()), cfg.BasePath)
+	if auth != nil {
+		log.Printf("登录验证: 已启用（用户文件 %s）", cfg.UsersFile)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -278,8 +341,9 @@ func displayAddr(a net.Addr) string {
 	return s
 }
 
-// newHandler 返回静态文件服务，支持 base_path 前缀与访问日志。
-func newHandler(root fs.FS, cfg Config) http.Handler {
+// newHandler 返回静态文件服务，支持 base_path 前缀、登录验证与访问日志。
+// 顺序：accessLog → base_path StripPrefix → requireLogin → 内层路由。
+func newHandler(root fs.FS, cfg Config, auth *authServer) http.Handler {
 	files := http.FileServer(http.FS(root))
 	static := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -298,10 +362,26 @@ func newHandler(root fs.FS, cfg Config) http.Handler {
 		files.ServeHTTP(w, r)
 	})
 
-	var h http.Handler = static
+	var h http.Handler
+	if auth != nil {
+		inner := http.NewServeMux()
+		auth.register(inner)
+		inner.Handle("/", static)
+		h = auth.requireLogin(inner)
+	} else {
+		// 未启用登录验证：除 /api/me 外与原来的静态服务完全一致（不经过 ServeMux 的路径规范化）。
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/me" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+				apiMeDisabled(w, r)
+				return
+			}
+			static.ServeHTTP(w, r)
+		})
+	}
 	if cfg.BasePath != "/" {
+		app := h
 		mux := http.NewServeMux()
-		mux.Handle(cfg.BasePath+"/", http.StripPrefix(cfg.BasePath, static))
+		mux.Handle(cfg.BasePath+"/", http.StripPrefix(cfg.BasePath, app))
 		mux.HandleFunc(cfg.BasePath, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, cfg.BasePath+"/", http.StatusMovedPermanently)
 		})
@@ -330,4 +410,37 @@ func accessLog(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 		log.Printf("%s %s %s %d %s", r.RemoteAddr, r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Microsecond))
 	})
+}
+
+// resetPassword 实现 --reset-password：从标准输入读取新密码并写回用户文件。
+func resetPassword(usersFile, name string) error {
+	users, err := loadUsers(usersFile)
+	if err != nil {
+		return err
+	}
+	if _, ok := users.find(name); !ok {
+		return fmt.Errorf("用户文件 %s 中不存在用户 %q（如需重新初始化，可删除该文件后重启服务，访问 /setup 重新创建管理员）", usersFile, name)
+	}
+	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		fmt.Fprint(os.Stderr, "新密码: ")
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+		return fmt.Errorf("读取新密码失败: %w", err)
+	}
+	pw := strings.TrimRight(line, "\r\n")
+	if len(pw) < minPasswordLen {
+		return fmt.Errorf("密码至少 %d 个字符", minPasswordLen)
+	}
+	if len(pw) > maxPasswordLen {
+		return errPasswordTooLong
+	}
+	if err := users.setPassword(name, pw); err != nil {
+		return err
+	}
+	if err := users.save(); err != nil {
+		return fmt.Errorf("保存用户文件 %s 失败: %w", usersFile, err)
+	}
+	fmt.Printf("已重置用户 %s 的密码，已生效，无需重启服务。\n", name)
+	return nil
 }

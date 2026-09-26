@@ -20,6 +20,8 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt 未格式化的文件"; exit 1; }
       - name: go vet
         run: go vet ./...
+      - name: go test
+        run: go test ./...
       - name: build
         run: make build
       - name: smoke test

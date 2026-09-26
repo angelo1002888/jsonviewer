@@ -17,6 +17,7 @@
 - **出错定位**：JSON 解析失败时，会提示出错的行号、列号，并将编辑器光标自动定位到出错位置。
 - **大 JSON 性能**：树视图采用虚拟滚动、节点懒创建，可流畅处理超大文件。实测约 30MB 的 JSON 解析耗时约 1 秒，280 万行全部展开约 0.5 秒。
 - **编辑器**：基于 CodeMirror 6。`Ctrl+Enter` 立即解析当前内容，`Ctrl+F` 打开文本查找，`Tab` 缩进 4 个空格。
+- **可选登录验证与简单用户管理**：默认不需要登录；开启后支持多用户、管理员权限、会话管理与密码找回，详见下文「登录验证（可选）」。
 
 ## 构建
 
@@ -54,6 +55,9 @@ Go 的 `flag` 包对单横线和双横线一视同仁（`-listen` 与 `--listen`
 | `-a, --access-log` | 是否打印访问日志 | `false` |
 | `--tls-cert`（无短名） | TLS 证书文件；与 `--tls-key` 同时设置后启用 HTTPS | 空（不启用） |
 | `--tls-key`（无短名） | TLS 私钥文件 | 空（不启用） |
+| `--auth`（无短名） | 启用登录验证（首次访问进入 `/setup` 设置管理员） | `false` |
+| `--users-file <file>`（无短名） | 用户文件路径 | 配置文件同目录下的 `users.json`（未用 `-c` 时为当前目录） |
+| `--reset-password <user>`（无短名） | 重置指定用户的密码后退出（新密码从标准输入读取），不启动服务 | - |
 | `-c, --config` | 配置文件路径（`key = value` 格式） | 空（不使用配置文件） |
 | `-v, --version` | 显示版本号并退出 | - |
 | `-e, --example-config` | 输出一份示例配置文件内容并退出 | - |
@@ -85,6 +89,12 @@ access_log = false
 # 同时设置证书和私钥后启用 HTTPS（浏览器剪贴板 API 需要 HTTPS 或 localhost）
 # tls_cert = /etc/jsonviewer/server.crt
 # tls_key  = /etc/jsonviewer/server.key
+
+# 登录验证（true / false）。启用后首次访问进入 /setup 设置管理员
+# auth = true
+
+# 用户文件；不设 users_file 时默认为配置文件同目录下的 users.json
+# users_file = /etc/jsonviewer/users.json
 ```
 
 然后用 `--config` 指定该文件启动：
@@ -177,9 +187,37 @@ sudo systemctl enable --now jsonviewer
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 ```
 
+## 登录验证（可选）
+
+默认不需要登录。设置 `auth = true`（或加 `--auth` 参数）后启用登录验证；用户数据保存在 `users_file` 指定的 JSON 文件里，不设置时默认为配置文件同目录下的 `users.json`（未使用 `-c`/`--config` 时为当前目录下的 `users.json`）。
+
+**首次设置**：启用后首次访问任意页面会跳转到 `/setup`，填写管理员用户名（默认 `admin`，可改）和密码即可创建管理员并自动登录。之后未登录访问会跳转到 `/login`。用户名 1–32 个字符，仅限字母、数字和 `_ . -`，区分大小写，创建后不可修改；密码最少 6 个字符。
+
+**账户与用户管理**：登录后，中栏「视图」面板标题栏右侧会出现用户菜单（显示当前用户名，点开下拉菜单），也可以直接访问对应地址：
+
+- 「修改密码」/ `/account`：修改自己的密码（需先输入当前密码）；修改成功后会使本账户在其它设备上的登录立即失效。
+- 「用户管理」/ `/admin/users`：仅管理员可见/访问，可新增用户、删除用户、重置他人密码、设置或取消管理员；不能删除自己，也不能删除或降级最后一个管理员。
+- 「退出登录」：下拉菜单里的按钮（POST 请求）。
+
+`/account`、`/admin/users` 这两个独立页面顶部也有一条状态栏，显示当前用户，并提供「返回查看器」「账户设置」「用户管理」（仅管理员可见）「退出登录」几个链接/按钮；这些页面（含 `/setup`、`/login`）文案固定为中文。
+
+**会话与安全**：登录状态通过 Cookie 保存，7 天滑动过期（距上次续期超过 1 分钟的访问会自动续期），会话保存在内存中，服务重启后所有人都需要重新登录；删除某用户，或管理员重置了某用户的密码后，该用户的会话会立即失效。登录失败会限速：同一 IP 或同一用户名连续失败 10 次后锁定 60 秒。登录、登出、新增/删除用户、重置密码、修改管理员权限等操作都会记录到日志（journal）。用户文件权限固定为 `0600`，只保存密码的 PBKDF2-SHA256（21 万次迭代）哈希，不保存明文密码。（顺带一提：查看器里粘贴的 JSON 内容始终只保存在浏览器本地、不会上传服务器，这与是否启用登录验证无关。）
+
+**忘记密码时恢复**：
+
+```bash
+echo '新密码' | sudo -u jsonviewer jsonviewer -c /etc/jsonviewer/jsonviewer.conf --reset-password admin
+```
+
+`--reset-password` 把新密码写入用户文件后立即退出；省略 `echo '新密码' |` 会在终端交互提示输入。服务运行中执行该命令会自动生效（服务检测到用户文件被外部改写后自动重新加载），**不需要重启**。删除 `users.json` 后重启服务、回到 `/setup` 重新创建管理员的方式则仍需要重启服务。
+
+**部署注意事项**：启用 `auth` 后，进程需要能写入 `users_file` 所在目录（首次启动会在该目录创建空的 `users.json`）。`deploy/jsonviewer.service` 已包含 `ReadWritePaths=/etc/jsonviewer`；一键安装脚本会把 `/etc/jsonviewer` 属主设为 `jsonviewer:jsonviewer` 并 `chmod 0750`，因此用一键安装启用登录验证无需额外操作。手动安装（见下文"手动安装"）需要自行执行 `sudo chown jsonviewer:jsonviewer /etc/jsonviewer`，否则服务会因无法写入用户文件而启动失败。
+
 ## 反向代理
 
 若通过 Nginx 等反向代理挂在子路径下（而不是直接用域名根路径访问），需要将 `base_path` 设置为对应的子路径（例如 `/jsonviewer`），保证前端资源引用的路径与代理路径一致。
+
+启用登录验证时，反向代理必须原样转发 `Host` 请求头（用于同源校验，POST 请求会校验 `Origin`/`Host`）；若通过 HTTPS 反代访问，还需设置 `X-Forwarded-Proto https`，登录会话的 Cookie 才会带上 `Secure` 标记。
 
 Nginx 最小配置片段示例（假设子路径为 `/jsonviewer`，后端监听 `127.0.0.1:8080`，`base_path = /jsonviewer`）：
 
@@ -188,6 +226,7 @@ location /jsonviewer/ {
     proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
 

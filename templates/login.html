@@ -1,0 +1,7 @@
+{{define "content"}}
+<form method="post" action="{{.Base}}login" class="auth-form">
+  <label>用户名<input type="text" name="username" value="{{.Username}}" maxlength="32" autocomplete="username" required autofocus></label>
+  <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+  <button type="submit" class="primary">登录</button>
+</form>
+{{end}}

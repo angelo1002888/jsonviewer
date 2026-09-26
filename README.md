@@ -17,6 +17,7 @@ A self-hosted JSON viewer that replicates the three-pane layout and interactions
 - **Error location**: when JSON parsing fails, the line and column of the error are shown, and the editor cursor is automatically moved to the error position.
 - **Large JSON performance**: the tree view uses virtual scrolling with lazy node creation, so very large files stay responsive. Benchmarks: a ~30MB JSON file parses in about 1 second, and expanding all 2.8 million lines takes about 0.5 seconds.
 - **Editor**: based on CodeMirror 6. `Ctrl+Enter` parses the current content immediately, `Ctrl+F` opens text search, `Tab` indents 4 spaces.
+- **Optional login authentication with simple user management**: no login is required by default; when enabled, it supports multiple users, an admin role, session management, and password recovery — see "Authentication (optional)" below.
 
 ## Build
 
@@ -54,6 +55,9 @@ Go's `flag` package treats single and double dashes the same (`-listen` and `--l
 | `-a, --access-log` | Whether to print access logs | `false` |
 | `--tls-cert` (no short form) | TLS certificate file; enables HTTPS when set together with `--tls-key` | empty (disabled) |
 | `--tls-key` (no short form) | TLS private key file | empty (disabled) |
+| `--auth` (no short form) | Enable login authentication (first visit redirects to `/setup` to create the admin) | `false` |
+| `--users-file <file>` (no short form) | Path to the user data file | `users.json` next to the config file (or in the current directory if `-c` is not used) |
+| `--reset-password <user>` (no short form) | Reset the given user's password (new password read from stdin) and exit; does not start the server | - |
 | `-c, --config` | Path to a config file (`key = value` format) | empty (no config file) |
 | `-v, --version` | Print the version and exit | - |
 | `-e, --example-config` | Print a sample config file and exit | - |
@@ -85,7 +89,15 @@ access_log = false
 # 同时设置证书和私钥后启用 HTTPS（浏览器剪贴板 API 需要 HTTPS 或 localhost）
 # tls_cert = /etc/jsonviewer/server.crt
 # tls_key  = /etc/jsonviewer/server.key
+
+# 登录验证（true / false）。启用后首次访问进入 /setup 设置管理员
+# auth = true
+
+# 用户文件；不设 users_file 时默认为配置文件同目录下的 users.json
+# users_file = /etc/jsonviewer/users.json
 ```
+
+(The generated file's own comments are in Chinese regardless of which README you're reading — this is the literal output of `--example-config`.)
 
 Then start with `--config` pointing to that file:
 
@@ -177,9 +189,37 @@ The script is also attached to each GitHub Release, so you can download it first
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 ```
 
+## Authentication (optional)
+
+No login is required by default. Set `auth = true` in the config file (or pass `--auth`) to enable it. User data is stored in the JSON file given by `users_file`; if unset, it defaults to `users.json` next to the config file (or in the current directory if `-c`/`--config` is not used).
+
+**First-time setup**: once enabled, the first visit to any page redirects to `/setup`, where you choose an admin username (default `admin`, can be changed) and password; submitting creates the admin and logs you in automatically. After that, unauthenticated visits redirect to `/login`. Usernames must be 1-32 characters, limited to letters, digits, and `_ . -`, are case-sensitive, and cannot be changed later. Passwords must be at least 6 characters.
+
+**Account and user management**: once logged in, a user menu appears at the right end of the middle "View" pane's title bar (shows the current username; click to open a dropdown), or you can navigate directly to:
+
+- "Change password" / `/account`: change your own password (current password required); a successful change immediately logs out all your other sessions/devices.
+- "User management" / `/admin/users`: admin-only (menu entry hidden for non-admins). Add users, delete users, reset other users' passwords, and grant/revoke admin. You cannot delete yourself, and cannot delete or demote the last remaining admin.
+- "Log out": a button in the dropdown (submits a POST).
+
+The standalone `/account` and `/admin/users` pages also show a status bar at the top with the current user and links/buttons for "back to viewer", "account settings", "user management" (admins only), and "log out". Note: these auth pages (`/setup`, `/login`, `/account`, `/admin/users`) are Chinese-only; their text is hardcoded in the Go templates.
+
+**Sessions and security**: login state is a cookie-based session with a 7-day sliding expiry (visits more than a minute apart refresh it); sessions live in memory only, so everyone must log in again after a service restart. Deleting a user, or an admin resetting someone's password, immediately invalidates that user's session(s). Failed logins are rate-limited: 10 failures from the same IP or against the same username lock that key for 60 seconds. Logins, logouts, and user/admin changes are all logged (journal). The user file is written with mode `0600` and stores only PBKDF2-SHA256 password hashes (210,000 iterations), never plaintext. (Unrelated to auth: pasted JSON content always stays in the browser and is never uploaded to the server.)
+
+**Recovering a lost password**:
+
+```bash
+echo 'new-password' | sudo -u jsonviewer jsonviewer -c /etc/jsonviewer/jsonviewer.conf --reset-password admin
+```
+
+`--reset-password` writes the new password to the user file and exits immediately; omit `echo 'new-password' |` to be prompted interactively instead. If the service is already running, the change takes effect automatically (the service detects that the user file was rewritten externally and reloads it) — **no restart needed**. Deleting `users.json` and restarting the service to go back to `/setup` and recreate the admin still requires a restart.
+
+**Deployment note**: with `auth` enabled, the process needs write access to the directory holding `users_file` (it creates an empty `users.json` there on first start). `deploy/jsonviewer.service` already includes `ReadWritePaths=/etc/jsonviewer`. The quick-install script sets `/etc/jsonviewer`'s owner to `jsonviewer:jsonviewer` and `chmod`s it to `0750`, so enabling authentication after a quick install needs no extra steps. A manual install (see "Manual install" below) needs `sudo chown jsonviewer:jsonviewer /etc/jsonviewer` — otherwise the service fails to start because it cannot write the user file.
+
 ## Reverse proxy
 
 If you mount the app under a sub-path via Nginx or another reverse proxy (rather than serving it at the domain root), set `base_path` to that sub-path (e.g. `/jsonviewer`) so that the frontend's asset paths match the proxy path.
+
+When authentication is enabled, the reverse proxy must forward the `Host` header unchanged (it's used for the same-origin check on POST requests). If accessed over HTTPS through the proxy, also set `X-Forwarded-Proto https` so the session cookie gets the `Secure` flag.
 
 Minimal Nginx config snippet (assuming sub-path `/jsonviewer`, backend listening on `127.0.0.1:8080`, `base_path = /jsonviewer`):
 
@@ -188,6 +228,7 @@ location /jsonviewer/ {
     proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
 

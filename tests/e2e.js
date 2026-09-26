@@ -2,10 +2,13 @@
  * 端到端测试：启动已编译的 ./jsonviewer，用本机 Chrome（puppeteer-core）跑功能与大 JSON 性能检查。
  * 用法：make build && npm install && npm run test:e2e
  * 环境变量：CHROME=/path/to/chrome（默认 /usr/bin/google-chrome）、BIG=200000（大 JSON 记录数，0 跳过性能测试）
+ * 另起一个启用登录验证（auth = true）的实例，在独立的 BrowserContext 中测试初始设置、登录、用户菜单与用户管理。
  */
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const net = require('net');
+const os = require('os');
 const path = require('path');
 
 const CHROME = process.env.CHROME || '/usr/bin/google-chrome';
@@ -20,12 +23,141 @@ function check(name, ok, detail) {
 function freePort() {
   return new Promise((res, rej) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
 }
+// 等待服务开始监听（最多 5 秒）
+async function waitPort(port) {
+  for (let i = 0; i < 100; i++) {
+    const ok = await new Promise(res => { const c = net.connect(port, '127.0.0.1', () => { c.end(); res(true); }); c.on('error', () => res(false)); });
+    if (ok) return;
+    await sleep(50);
+  }
+  throw new Error('服务未在 5 秒内监听端口 ' + port);
+}
+
+// 预期内的 4xx（登录失败 401、越权 403、限速 429、表单错误 400）会让 Chrome 打印
+// "Failed to load resource" 控制台错误，这类不算页面错误。
+const EXPECTED_HTTP_ERR = /^Failed to load resource: the server responded with a status of (400|401|403|429)\b/;
+
+// 填写并提交表单，等待跳转完成，返回导航响应
+async function submitForm(page, sel, values) {
+  await page.$eval(sel, (f, v) => { for (const k in v) f.elements[k].value = v[k]; }, values);
+  const [res] = await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.$eval(sel, f => f.requestSubmit())]);
+  return res;
+}
+
+// 启用登录验证的第二个实例
+async function authSuite(browser) {
+  console.log('登录验证测试');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonviewer-e2e-'));
+  const port = await freePort();
+  const conf = path.join(tmp, 'jsonviewer.conf');
+  fs.writeFileSync(conf, 'auth = true\nusers_file = ' + path.join(tmp, 'users.json') + '\nlisten = 127.0.0.1:' + port + '\n');
+  const srv = spawn(BIN, ['-c', conf], { stdio: ['ignore', 'pipe', 'pipe'] });
+  srv.stderr.on('data', d => process.env.VERBOSE && process.stderr.write(d));
+  let ctx;
+  try {
+    await waitPort(port);
+    ctx = await browser.createBrowserContext();   // 独立 Cookie / sessionStorage
+    const page = await ctx.newPage();
+    await page.setViewport({ width: 1400, height: 800 });
+    const errors = [];
+    page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+    // 纯文本 403 页没有 <link rel=icon>，Chrome 会自动请求 /favicon.ico（404），同样不算
+    page.on('console', m => {
+      if (m.type() !== 'error' || EXPECTED_HTTP_ERR.test(m.text()) || /\/favicon\.ico$/.test((m.location() || {}).url || '')) return;
+      errors.push('console: ' + m.text());
+    });
+    const base = 'http://127.0.0.1:' + port;
+    const where = () => new URL(page.url()).pathname;
+    const menuInfo = async () => {
+      await page.waitForSelector('#userMenu:not([hidden])', { timeout: 3000 });
+      await page.click('#userBtn');
+      const info = await page.evaluate(() => ({
+        name: document.getElementById('userName').textContent,
+        admin: document.getElementById('menuAdmin').offsetParent !== null
+      }));
+      await page.click('#userBtn');
+      return info;
+    };
+
+    // 1. 未登录：进入 /setup；app.js 受保护，样式公开
+    await page.goto(base + '/', { waitUntil: 'networkidle0' });
+    check('未登录访问 / 跳转到 /setup', where() === '/setup', where());
+    const st = await page.evaluate(async () => [(await fetch('/js/app.js', { redirect: 'manual' })).status, (await fetch('/css/style.css')).status]);
+    check('未登录时 app.js 不可访问、style.css 200', st[0] !== 200 && st[1] === 200, st.join(','));
+
+    // 2. 初始设置管理员
+    check('/setup 用户名默认 admin', (await page.$eval('input[name=username]', e => e.value)) === 'admin');
+    await submitForm(page, 'form', { password: 'adminpass1', confirm: 'adminpass1' });
+    check('设置管理员后进入主页', where() === '/', where());
+    let m = await menuInfo();
+    check('用户菜单显示 admin，含"用户管理"', m.name === 'admin' && m.admin, JSON.stringify(m));
+
+    // 9（auth 实例部分）. 登录后 /api/me 返回用户信息
+    const me = await page.evaluate(() => fetch('api/me').then(r => r.json()));
+    check('/api/me 返回登录用户', me.auth === true && me.user === 'admin' && me.admin === true, JSON.stringify(me));
+
+    // 3. 已设置后 /setup 不再可用
+    await page.goto(base + '/setup', { waitUntil: 'networkidle0' });
+    check('再次访问 /setup 被重定向', where() !== '/setup', where());
+
+    // 4. 修改密码
+    await page.goto(base + '/account', { waitUntil: 'networkidle0' });
+    let res = await submitForm(page, 'form.auth-form', { current: 'wrong-pass', password: 'adminpass2', confirm: 'adminpass2' });
+    let msg = await page.$eval('.auth-msg', e => e.className + ':' + e.textContent).catch(() => '');
+    check('当前密码错误被拒绝', res.status() === 400 && /error:.*当前密码错误/.test(msg), res.status() + ' ' + msg);
+    res = await submitForm(page, 'form.auth-form', { current: 'adminpass1', password: 'adminpass2', confirm: 'adminpass2' });
+    msg = await page.$eval('.auth-msg', e => e.className + ':' + e.textContent).catch(() => '');
+    check('当前密码正确时修改成功', res.status() === 200 && /\bok:/.test(msg), msg);
+
+    // 5. 用户管理：新增 bob；不能删除自己
+    await page.goto(base + '/admin/users', { waitUntil: 'networkidle0' });
+    await submitForm(page, 'form.auth-inline-form', { username: 'bob', password: 'bobpass1' });
+    const names = await page.$$eval('.auth-table tbody tr td:first-child', tds => tds.map(t => t.textContent.trim()));
+    check('新增用户 bob 后列表出现 bob', names.some(n => n === 'bob'), names.join(','));
+    const selfDel = await page.$$eval('.auth-table tbody tr', trs => trs.filter(tr => /（我）/.test(tr.textContent)).map(tr => !!tr.querySelector('button.danger')));
+    const del = await page.evaluate(() => fetch('/admin/users/delete', { method: 'POST', body: new URLSearchParams({ name: 'admin' }) }).then(async r => [r.status, await r.text()]));
+    check('不能删除自己（无删除按钮，且提交被拒）', selfDel.length === 1 && !selfDel[0] && del[0] === 400 && del[1].includes('不能删除自己'), selfDel + ' ' + del[0]);
+
+    // 6. 退出登录：清除该用户的暂存内容
+    await page.goto(base + '/', { waitUntil: 'networkidle0' });
+    await page.evaluate(() => window.jsonviewer.setText('{"secret":1}'));
+    const savedBefore = await page.evaluate(() => sessionStorage.getItem('jsonviewer_text:admin'));
+    await page.click('#userBtn');
+    await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('#logoutForm button')]);
+    const savedAfter = await page.evaluate(() => sessionStorage.getItem('jsonviewer_text:admin'));
+    check('退出后落在 /login 且清除暂存内容', where() === '/login' && savedBefore === '{"secret":1}' && savedAfter === null, where() + ' ' + savedBefore + ' -> ' + savedAfter);
+
+    // 7. 普通用户 bob
+    await submitForm(page, 'form', { username: 'bob', password: 'bobpass1' });
+    m = await menuInfo();
+    check('bob 登录后菜单显示 bob，无"用户管理"', where() === '/' && m.name === 'bob' && !m.admin, JSON.stringify(m));
+    res = await page.goto(base + '/admin/users', { waitUntil: 'networkidle0' });
+    check('普通用户访问 /admin/users 返回 403', res.status() === 403, res.status());
+
+    // 8. 登出后连续输错密码触发锁定（放在最后：同一 IP 会被锁 60 秒）
+    await page.goto(base + '/', { waitUntil: 'networkidle0' });
+    await page.click('#userBtn');
+    await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('#logoutForm button')]);
+    const codes = [];
+    for (let i = 0; i < 10; i++) codes.push((await submitForm(page, 'form', { username: 'bob', password: 'wrong-' + i })).status());
+    res = await submitForm(page, 'form', { username: 'bob', password: 'bobpass1' });
+    msg = await page.$eval('.auth-msg', e => e.textContent).catch(() => '');
+    check('连续 10 次错误后第 11 次被锁定', codes.every(c => c === 401) && res.status() === 429 && msg.includes('尝试次数过多'), codes.join(',') + ' -> ' + res.status() + ' ' + msg);
+
+    // 10. 无页面错误
+    check('登录验证实例无页面错误', errors.length === 0, errors.join(' | '));
+  } finally {
+    if (ctx) await ctx.close().catch(() => {});
+    srv.kill('SIGTERM');
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 (async () => {
   const port = await freePort();
   const srv = spawn(BIN, ['-listen', '127.0.0.1:' + port], { stdio: ['ignore', 'pipe', 'pipe'] });
   srv.stderr.on('data', d => process.env.VERBOSE && process.stderr.write(d));
-  await sleep(400);
+  await waitPort(port);
   const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--disable-gpu'] });
   try {
     const page = await browser.newPage();
@@ -119,7 +251,11 @@ function freePort() {
       t = await page.evaluate(() => { const t0 = performance.now(); window.jsonviewer.parse(); return Math.round(performance.now() - t0); });
       check('重新解析格式化后文本', t < 5000, t + 'ms');
     }
+    const me = await page.evaluate(() => fetch('api/me').then(r => r.text()));
+    check('未启用登录验证：/api/me 返回 {"auth":false}，用户菜单隐藏', JSON.stringify(JSON.parse(me)) === '{"auth":false}' && (await page.$eval('#userMenu', e => e.hidden)), me.trim());
     check('无页面错误', errors.length === 0, errors.join(' | '));
+
+    await authSuite(browser);
   } finally {
     await browser.close();
     srv.kill('SIGTERM');

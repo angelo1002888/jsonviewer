@@ -44,6 +44,7 @@ body.resizing iframe, body.resizing textarea { pointer-events: none; }
   flex: none; height: 30px; line-height: 30px; padding: 0 10px;
   background: var(--header-bg); border-bottom: 1px solid var(--border);
   font-weight: 600; color: var(--header-fg); user-select: none;
+  display: flex; align-items: center; justify-content: space-between;
 }
 .toolbar {
   flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
@@ -159,3 +160,90 @@ body.resizing iframe, body.resizing textarea { pointer-events: none; }
   padding: 10px 24px; background: rgba(0,0,0,.6); color: #fff; border-radius: 4px; font-size: 13px; pointer-events: none;
 }
 [hidden] { display: none !important; }
+
+/* ---------- 登录 / 设置 / 账户 / 用户管理页 ---------- */
+body.auth-page { overflow: auto; height: auto; min-height: 100%; }
+.auth-wrap { width: 360px; max-width: calc(100vw - 24px); margin: 12vh auto 40px; }
+.auth-wrap.wide { width: 720px; margin-top: 6vh; }
+.auth-top {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 8px; padding: 0 2px;
+  font-size: 12px; color: var(--muted);
+}
+.auth-top b { color: var(--text); }
+.auth-top .fill { flex: 1; }
+.auth-top a, .auth-page button.link { color: var(--accent); text-decoration: none; }
+.auth-top a:hover, .auth-page button.link:hover { text-decoration: underline; }
+.auth-page button.link { padding: 0; border: 0; background: none; cursor: pointer; font-size: 12px; }
+.auth-page form.inline { display: inline; margin: 0; }
+.auth-card { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+.auth-title {
+  height: 34px; line-height: 34px; padding: 0 14px;
+  background: var(--header-bg); border-bottom: 1px solid var(--border);
+  font-weight: 600; color: var(--header-fg);
+}
+.auth-body { padding: 16px; }
+.auth-hint { margin: 0 0 12px; color: var(--muted); }
+.auth-msg { margin-bottom: 12px; padding: 7px 10px; border-radius: 3px; border: 1px solid; }
+.auth-msg.error { color: #c0392b; background: #fdf1f0; border-color: #f2c4bf; }
+.auth-msg.ok { color: #2e7d32; background: #f0f8f0; border-color: #bfe0c1; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form.narrow { max-width: 320px; }
+.auth-form label { display: flex; flex-direction: column; gap: 4px; color: var(--header-fg); }
+.auth-page input[type=text], .auth-page input[type=password] {
+  height: 28px; padding: 0 8px; border: 1px solid var(--btn-border); border-radius: 3px; outline: none; background: #fff;
+}
+.auth-page input[type=text]:focus, .auth-page input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,125,221,.15); }
+.auth-page button:not(.link) {
+  height: 26px; padding: 0 12px; border: 1px solid var(--btn-border); border-radius: 3px;
+  background: var(--btn-bg); cursor: pointer; white-space: nowrap;
+}
+.auth-page button:not(.link):hover { background: var(--btn-hover); border-color: #b9c6d8; }
+.auth-page button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.auth-page button.primary:hover { background: var(--accent); filter: brightness(1.08); }
+.auth-form button.primary { height: 30px; margin-top: 4px; }
+.auth-page button.danger { color: #c0392b; }
+.auth-page button.danger:hover { background: #fdf1f0; border-color: #e6a39b; }
+.auth-inline-form { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.auth-inline-form input[type=text], .auth-inline-form input[type=password] { width: 170px; }
+.auth-inline-form .check { display: inline-flex; align-items: center; gap: 4px; color: var(--header-fg); }
+.auth-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; border: 1px solid var(--border); border-radius: 3px; }
+.auth-table th {
+  text-align: left; font-weight: 600; color: #444; background: #f4f6f9;
+  border-bottom: 1px solid var(--border); padding: 5px 8px;
+}
+.auth-table td { padding: 5px 8px; border-bottom: 1px solid #eef1f4; vertical-align: middle; }
+.auth-table tr:last-child td { border-bottom: 0; }
+.auth-table tr:hover td { background: #f0f5fc; }
+.auth-table .c-name { width: 20%; }
+.auth-table .c-admin { width: 8%; }
+.auth-table .c-time { width: 21%; }
+.auth-table td.ops { white-space: nowrap; }
+.auth-table td.ops form.inline { margin-right: 4px; }
+.auth-table td.ops input[type=password] { width: 96px; height: 24px; }
+.auth-table td.ops button { height: 24px; padding: 0 8px; }
+.auth-page .muted { color: var(--muted); }
+
+/* ---------- 用户菜单（启用登录验证时显示在“视图”标题栏右侧） ---------- */
+.user-menu { display: inline-flex; margin-left: auto; font-weight: normal; }
+.user-menu #userBtn {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 180px; height: 22px; padding: 0 8px;
+  border: 1px solid var(--btn-border); border-radius: 3px; background: var(--btn-bg); cursor: pointer; font-size: 12px; line-height: 20px;
+}
+.user-menu #userBtn:hover { background: var(--btn-hover); border-color: #b9c6d8; }
+.user-menu #userName { overflow: hidden; text-overflow: ellipsis; }
+.user-menu .caret {
+  width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 4px solid var(--muted);
+}
+.user-drop {
+  position: fixed; z-index: 1000; display: block; min-width: 120px; padding: 4px 0;   /* 位置由 JS 按按钮计算，避免被面板裁剪 */
+  background: #fff; border: 1px solid #c8d0da; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.15);
+  font-size: 12px; line-height: 1.5; font-weight: normal; user-select: none;
+}
+.user-drop .ctx-sep { display: block; }
+.user-drop a, .user-drop form button {
+  display: block; width: 100%; padding: 5px 14px; color: var(--text); text-decoration: none; white-space: nowrap; text-align: left;
+}
+.user-drop form { margin: 0; }
+.user-drop form button { height: auto; line-height: inherit; border: 0; border-radius: 0; background: none; font-size: 12px; cursor: pointer; }
+.user-drop a:hover, .user-drop form button:hover { background: var(--btn-hover); color: var(--accent); }

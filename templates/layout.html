@@ -1,0 +1,39 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} - JSON Viewer</title>
+  <link rel="icon" href="{{.Base}}assets/ico/object.gif">
+  <link rel="stylesheet" href="{{.Base}}css/style.css">
+</head>
+<body class="auth-page">
+<div class="auth-wrap{{if .Wide}} wide{{end}}">
+  {{- if .User}}
+  <div class="auth-top">
+    <span>当前用户：<b>{{.User}}</b>{{if .Admin}}（管理员）{{end}}</span>
+    <span class="fill"></span>
+    <a href="{{.Base}}">返回查看器</a>
+    <a href="{{.Base}}account">账户设置</a>
+    {{- if .Admin}}
+    <a href="{{.Base}}admin/users">用户管理</a>
+    {{- end}}
+    <form method="post" action="{{.Base}}logout" class="inline"><button type="submit" class="link">退出登录</button></form>
+  </div>
+  {{- end}}
+  <div class="auth-card">
+    <div class="auth-title">{{.Title}}</div>
+    <div class="auth-body">
+      {{- if .Error}}
+      <div class="auth-msg error">{{.Error}}</div>
+      {{- end}}
+      {{- if .Notice}}
+      <div class="auth-msg ok">{{.Notice}}</div>
+      {{- end}}
+      {{template "content" .}}
+    </div>
+  </div>
+</div>
+</body>
+</html>
+{{end}}

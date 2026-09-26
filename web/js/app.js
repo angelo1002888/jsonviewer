@@ -6,7 +6,7 @@
   var ROW_H = 18;           // 树每行高度（与 ExtJS 一致）
   var GRID_MAX_ROWS = 20000; // 属性表最多直接渲染的行数
   var MAX_SCROLL_H = 30000000; // 浏览器对元素高度有上限（Chrome 约 3350 万 px），超出后按比例缩放滚动条
-  var STORAGE_KEY = 'jsonviewer_text';
+  var STORAGE_KEY = null;   // 启用登录验证时为 'jsonviewer_text:<用户名>'，确认身份前为 null（不读写）
 
   /* ======================================================================
    *  大数安全的 JSON 解析 / 序列化
@@ -474,7 +474,7 @@
     return SPACES.slice(0, n);
   }
 
-  // 两个空格缩进的格式化（先删空白再重排，与原站算法一致）
+  // 四个空格缩进的格式化（先删空白再重排，算法与原站一致，原站为两个空格）
   function format(text) {
     var s = minify(text), out = [], q = null, level = 0, last = 0, i, c, next, len = s.length;
     for (i = 0; i < len; i++) {
@@ -488,18 +488,18 @@
       if (c === ':') {
         out.push(s.slice(last, i + 1), ' '); last = i + 1;
       } else if (c === ',') {
-        out.push(s.slice(last, i + 1), '\n', spaces(level * 2)); last = i + 1;
+        out.push(s.slice(last, i + 1), '\n', spaces(level * 4)); last = i + 1;
       } else if (c === '{' || c === '[') {
         next = s.charAt(i + 1);
         if ((c === '{' && next === '}') || (c === '[' && next === ']')) {
           out.push(s.slice(last, i + 2)); last = i + 2; i++;   // 空容器保持 {} / []
         } else {
           level++;
-          out.push(s.slice(last, i + 1), '\n', spaces(level * 2)); last = i + 1;
+          out.push(s.slice(last, i + 1), '\n', spaces(level * 4)); last = i + 1;
         }
       } else if (c === '}' || c === ']') {
         level = Math.max(0, level - 1);
-        out.push(s.slice(last, i), '\n', spaces(level * 2), c); last = i + 1;
+        out.push(s.slice(last, i), '\n', spaces(level * 4), c); last = i + 1;
       }
     }
     if (last < len) out.push(s.slice(last));
@@ -600,6 +600,7 @@
   }
 
   function saveText(text) {
+    if (!STORAGE_KEY) return;
     try {
       if (text.length < 2 * 1024 * 1024) sessionStorage.setItem(STORAGE_KEY, text);
       else sessionStorage.removeItem(STORAGE_KEY);
@@ -734,9 +735,49 @@
   makeSplitter($('splitRight'), $('gridPanel'), 'right');
 
   /* ======================================================================
-   *  启动：恢复上次内容
+   *  用户菜单（仅在服务端启用登录验证时显示）
    * ==================================================================== */
-  (function init() {
+  var userMenu = {
+    el: $('userMenu'), btn: $('userBtn'), drop: $('userDrop'),
+    open: function () {
+      var r = this.btn.getBoundingClientRect(), d = this.drop;
+      d.hidden = false;
+      // 右对齐到按钮，并限制在视口内
+      var left = Math.max(4, Math.min(r.right - d.offsetWidth, window.innerWidth - d.offsetWidth - 4));
+      d.style.left = left + 'px';
+      d.style.top = (r.bottom + 3) + 'px';
+      this.btn.setAttribute('aria-expanded', 'true');
+    },
+    hide: function () { this.drop.hidden = true; this.btn.setAttribute('aria-expanded', 'false'); },
+    show: function (name, admin) {
+      $('userName').textContent = name;
+      $('menuAdmin').hidden = !admin;
+      this.el.hidden = false;
+    }
+  };
+  userMenu.btn.addEventListener('click', function () {
+    if (userMenu.drop.hidden) userMenu.open(); else userMenu.hide();
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (!userMenu.drop.hidden && !userMenu.el.contains(e.target)) userMenu.hide();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') userMenu.hide(); });
+  window.addEventListener('blur', function () { userMenu.hide(); });
+  window.addEventListener('resize', function () { userMenu.hide(); });
+  $('logoutForm').addEventListener('submit', function () {
+    try { if (STORAGE_KEY) sessionStorage.removeItem(STORAGE_KEY); } catch (e) { /* 忽略 */ }
+  });
+
+  /* ======================================================================
+   *  启动：确认登录身份后恢复上次内容（不同用户的暂存内容互相隔离）
+   * ==================================================================== */
+  function init(user) {
+    STORAGE_KEY = user ? 'jsonviewer_text:' + user : 'jsonviewer_text';
+    var current = edit.getValue();
+    if (current) {             // 身份确认前已有输入：以当前内容为准
+      if (current === lastParsed) saveText(current);
+      return;
+    }
     var saved = null;
     try { saved = sessionStorage.getItem(STORAGE_KEY); } catch (e) { saved = null; }
     if (saved) {
@@ -745,7 +786,23 @@
     } else {
       tree.render();
     }
-  })();
+  }
+  tree.render();
+  // auth 关闭、旧版服务端（404）或网络失败都按未启用登录处理，不阻塞查看器；只有 401 跳转登录页
+  var TO_LOGIN = {};
+  fetch('api/me', { credentials: 'same-origin', cache: 'no-store' }).then(function (res) {
+    if (res.status === 401) { location.href = 'login'; return TO_LOGIN; }
+    if (!res.ok) return null;
+    return res.json().catch(function () { return null; });
+  }, function () { return null; }).then(function (me) {
+    if (me === TO_LOGIN) return;
+    if (me && me.auth && me.user) {
+      userMenu.show(me.user, !!me.admin);
+      init(me.user);
+    } else {
+      init(null);
+    }
+  });
 
   // 供自动化测试 / 书签脚本使用的小接口
   window.jsonviewer = {

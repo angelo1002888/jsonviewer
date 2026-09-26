@@ -138,6 +138,11 @@ else
 fi
 
 install -d -m 0755 "$CONF_DIR"
+if [ -z "$ROOT" ]; then
+	# 启用登录验证时服务需要在该目录写入 users.json；配置文件本身仍为 root 0644
+	chown jsonviewer:jsonviewer "$CONF_DIR"
+	chmod 0750 "$CONF_DIR"
+fi
 CONF_NEW=""
 if [ -e "$CONF_DST" ]; then
 	CONF_NEW="$CONF_DST.new"
@@ -186,4 +191,5 @@ cat <<'DONE'
 查看状态与日志：
   sudo systemctl status jsonviewer
   sudo journalctl -u jsonviewer -f
+启用登录验证：编辑 /etc/jsonviewer/jsonviewer.conf 设置 auth = true 并重启，首次访问网页设置管理员
 DONE

@@ -14,9 +14,11 @@ RestartSec=3s
 User=jsonviewer
 Group=jsonviewer
 
-# 安全加固：纯静态服务，不需要写任何文件
+# 安全加固：只读文件系统；启用登录验证（auth = true）时服务需要在
+# /etc/jsonviewer 下写入 users.json（原子替换需要目录可写），因此放开该目录
 NoNewPrivileges=true
 ProtectSystem=strict
+ReadWritePaths=/etc/jsonviewer
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

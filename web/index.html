@@ -32,7 +32,17 @@
 
   <!-- 中：视图 -->
   <section class="panel center" id="treePanel">
-    <header class="panel-header">视图</header>
+    <header class="panel-header"><span>视图</span>
+      <span id="userMenu" class="user-menu" hidden>
+        <button type="button" id="userBtn" aria-haspopup="true" aria-expanded="false"><span id="userName"></span><span class="caret"></span></button>
+        <span id="userDrop" class="user-drop" hidden>
+          <a href="account">修改密码</a>
+          <a href="admin/users" id="menuAdmin" hidden>用户管理</a>
+          <span class="ctx-sep"></span>
+          <form method="post" action="logout" id="logoutForm"><button type="submit">退出登录</button></form>
+        </span>
+      </span>
+    </header>
     <div class="toolbar">
       <span class="label">查找:</span>
       <input type="text" id="searchText" autocomplete="off">
