@@ -273,7 +273,15 @@
       this.render();
     },
     select: function (n, ensureVisible) {
+      var prev = this.selected;
       this.selected = n;
+      if (!ensureVisible) {
+        // 只切换类名，不重绘图层：保持 DOM 稳定，也让浏览器能识别连续两次点击
+        var oldEl = prev ? this.layer.querySelector('.tn[data-r="' + prev.row + '"]') : null;
+        var newEl = this.layer.querySelector('.tn[data-r="' + n.row + '"]');
+        if (oldEl && this.rows[prev.row] === prev) oldEl.classList.remove('sel');
+        if (newEl && this.rows[n.row] === n) { newEl.classList.add('sel'); grid.show(n); return; }
+      }
       if (ensureVisible) {
         var p = n.parent, changed = false;
         while (p) { if (!p.expanded) { p.expanded = true; changed = true; } p = p.parent; }
@@ -305,16 +313,19 @@
 
   tree.body.addEventListener('scroll', function () { tree.scheduleRender(); });
   window.addEventListener('resize', function () { tree.scheduleRender(); });
+  // 单击选中；同一节点 350ms 内再次点击视为双击：非叶节点展开/折叠（自行判定，不依赖 dblclick 事件）
+  var lastClick = { node: null, time: 0 };
   tree.layer.addEventListener('click', function (e) {
     var n = tree.nodeAt(e.target);
     if (!n) return;
     if (e.target.classList.contains('ec')) { tree.toggle(n); return; }
+    var now = Date.now();
+    var isDouble = lastClick.node === n && now - lastClick.time < 350;
+    lastClick.node = n; lastClick.time = isDouble ? 0 : now;
     tree.select(n, false);
+    if (isDouble && isContainer(n)) tree.toggle(n);
   });
-  tree.layer.addEventListener('dblclick', function (e) {
-    var n = tree.nodeAt(e.target);
-    if (n && !e.target.classList.contains('ec')) tree.toggle(n);
-  });
+  tree.layer.addEventListener('mousedown', function (e) { if (e.detail > 1) e.preventDefault(); });  // 双击不选中文字
   tree.layer.addEventListener('contextmenu', function (e) {
     var n = tree.nodeAt(e.target);
     if (!n) return;

@@ -226,6 +226,21 @@ async function authSuite(browser) {
     await page.click('#btnCollapseAll');
     check('全部收缩', (await page.$$eval('#treeLayer .tn', els => els.length)) === 1);
 
+    // 双击非叶节点展开/折叠（用真实的 mousedown/up 序列，ElementHandle.click 的 clickCount 不会产生两次 click）
+    await page.evaluate(() => window.jsonviewer.tree.expandAll());
+    const dblClickRow = async text => {
+      const [x, y] = await page.evaluate(t => { const el = [...document.querySelectorAll('#treeLayer .tn')].find(e => e.textContent === t).querySelector('a span'); const b = el.getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; }, text);
+      await page.mouse.move(x, y); await page.mouse.down({ clickCount: 1 }); await page.mouse.up({ clickCount: 1 }); await page.mouse.down({ clickCount: 2 }); await page.mouse.up({ clickCount: 2 });
+    };
+    await page.evaluate(() => window.jsonviewer.tree.collapseAll());
+    await page.evaluate(() => { const t = window.jsonviewer.tree; t.root.expanded = true; t.flatten(); t.invalidate(); });
+    const rowsBefore = await page.$$eval('#treeLayer .tn', els => els.length);
+    await dblClickRow('tags');
+    const afterOpen = await page.$$eval('#treeLayer .tn', els => els.length);
+    await dblClickRow('tags');
+    const afterClose = await page.$$eval('#treeLayer .tn', els => els.length);
+    check('双击非叶节点展开再折叠', afterOpen > rowsBefore && afterClose === rowsBefore, rowsBefore + ' -> ' + afterOpen + ' -> ' + afterClose);
+
     await page.click('#searchText', { clickCount: 3 }); await page.keyboard.type('deeper'); await page.keyboard.press('Enter'); await sleep(300);
     check('查找命中并选中', (await page.$eval('#searchResult', e => e.textContent)) === '1/1' && (await page.$eval('#treeLayer .tn.sel', e => e.textContent)) === 'deeper');
     check('查找后属性表切换到命中节点', JSON.stringify(await page.$$eval('#gridRows tr', trs => trs.map(t => t.textContent))) === '["01","12","23"]');
