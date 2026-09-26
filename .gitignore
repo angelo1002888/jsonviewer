@@ -1,3 +1,31 @@
+# 编译产物
 /jsonviewer
+/jsonviewer.exe
 /dist/
+*.test
+*.out
+coverage.*
+
+# Node（仅用于重建 CodeMirror 打包产物和跑 e2e 测试）
 /node_modules/
+npm-debug.log*
+
+# 本地运行产生的文件
+*.log
+*.pid
+/jsonviewer.conf
+*.crt
+*.key
+*.pem
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Claude Code 个人本地设置（项目级 settings.json 保留提交）
+.claude/settings.local.json
