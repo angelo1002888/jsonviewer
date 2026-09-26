@@ -1,0 +1,20 @@
+{
+  "name": "jsonviewer-web",
+  "private": true,
+  "description": "前端第三方依赖打包（CodeMirror 6）。产物已提交到 web/js/vendor，日常构建 Go 二进制不需要 Node。",
+  "scripts": {
+    "build:cm": "esbuild web-src/codemirror-entry.js --bundle --minify --format=iife --outfile=web/js/vendor/codemirror.bundle.js",
+    "test:e2e": "node tests/e2e.js"
+  },
+  "devDependencies": {
+    "codemirror": "^6.0.2",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/search": "^6.7.2",
+    "esbuild": "^0.28.2",
+    "puppeteer-core": "^25.12.0"
+  }
+}

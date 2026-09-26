@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt 未格式化的文件"; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: build
+        run: make build
+      - name: smoke test
+        run: |
+          ./jsonviewer -listen 127.0.0.1:18080 &
+          sleep 1
+          curl -fsS -o /dev/null http://127.0.0.1:18080/
+          curl -fsS -o /dev/null http://127.0.0.1:18080/js/app.js
+          curl -fsS -o /dev/null http://127.0.0.1:18080/js/vendor/codemirror.bundle.js
+          kill %1
+      - name: e2e (headless Chrome)
+        run: |
+          npm ci
+          CHROME="$(which google-chrome || which chromium-browser || which chromium)" npm run test:e2e

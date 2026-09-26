@@ -1,0 +1,30 @@
+[Unit]
+Description=JSON Viewer (self-hosted online JSON viewer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 二进制与配置文件路径按实际部署位置修改
+ExecStart=/usr/local/bin/jsonviewer -config /etc/jsonviewer/jsonviewer.conf
+Restart=on-failure
+RestartSec=3s
+
+# 以非特权用户运行（需先创建：useradd -r -s /usr/sbin/nologin jsonviewer）
+User=jsonviewer
+Group=jsonviewer
+
+# 安全加固：纯静态服务，不需要写任何文件
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+# 若监听 1024 以下端口（如 80/443），取消下一行注释
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

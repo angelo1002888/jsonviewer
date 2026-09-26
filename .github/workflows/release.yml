@@ -1,0 +1,45 @@
+name: Release
+
+# 推送 v 开头的 tag 即发布：git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -e
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            out=dist/jsonviewer-${os}-${arch}
+            [ "$os" = windows ] && out=${out}.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" .
+          done
+          cp deploy/jsonviewer.service deploy/jsonviewer.conf dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+          ls -la dist
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## 安装
+            ```bash
+            curl -fsSL -o jsonviewer https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jsonviewer-linux-amd64
+            chmod +x jsonviewer && sudo mv jsonviewer /usr/local/bin/
+            ```
+            systemd 部署步骤见 README。附件内含 `jsonviewer.service` 与示例配置 `jsonviewer.conf`，校验和在 `SHA256SUMS`。

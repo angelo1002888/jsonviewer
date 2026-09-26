@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JSON在线视图查看器(Online JSON Viewer)</title>
+  <link rel="icon" href="assets/ico/object.gif">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- 左：JSON 数据 -->
+  <section class="panel" id="leftPanel">
+    <header class="panel-header">JSON数据</header>
+    <div class="toolbar">
+      <button type="button" id="btnCopy">复制</button>
+      <span class="sep"></span>
+      <button type="button" id="btnFormat">格式化</button>
+      <span class="sep"></span>
+      <button type="button" id="btnMinify">删除空格</button>
+      <span class="sep"></span>
+      <button type="button" id="btnMinifyEscape">删除空格并转义</button>
+      <span class="sep"></span>
+      <button type="button" id="btnUnescape">去除转义</button>
+    </div>
+    <div class="panel-body">
+      <div id="edit"></div>
+    </div>
+  </section>
+
+  <div class="splitter" id="splitLeft"></div>
+
+  <!-- 中：视图 -->
+  <section class="panel center" id="treePanel">
+    <header class="panel-header">视图</header>
+    <div class="toolbar">
+      <span class="label">查找:</span>
+      <input type="text" id="searchText" autocomplete="off">
+      <button type="button" id="btnSearch">GO!</button>
+      <span id="searchResult" class="search-result"></span>
+      <button type="button" id="btnNext" class="icon-btn"><img src="assets/ico/arrow_down.png" alt="">下一个</button>
+      <button type="button" id="btnPrev" class="icon-btn"><img src="assets/ico/arrow_up.png" alt="">上一个</button>
+      <span class="sep"></span>
+      <button type="button" id="btnExpandAll">全部展开</button>
+      <button type="button" id="btnCollapseAll">全部收缩</button>
+      <span class="fill"></span>
+      <button type="button" id="btnAbout">关于</button>
+    </div>
+    <div class="panel-body x-tree" id="treeBody">
+      <div id="treeSpacer"><div id="treeLayer"></div></div>
+    </div>
+  </section>
+
+  <div class="splitter" id="splitRight"></div>
+
+  <!-- 右：属性 -->
+  <section class="panel" id="gridPanel">
+    <header class="panel-header">属性</header>
+    <div class="panel-body grid-body" id="gridBody">
+      <table class="prop-grid">
+        <thead><tr><th class="col-name">名称</th><th class="col-value">值</th></tr></thead>
+        <tbody id="gridRows"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<!-- 右键菜单 -->
+<div id="ctxMenu" class="ctx-menu" hidden>
+  <div class="ctx-item" data-act="copyKey">复制Key</div>
+  <div class="ctx-item" data-act="copyValue">复制Value</div>
+  <div class="ctx-item" data-act="copyBoth">复制Key+Value</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" data-act="expandSub">展开所有子节点</div>
+  <div class="ctx-item" data-act="expandAll">展开所有节点</div>
+  <div class="ctx-item" data-act="collapseSub">收起所有子节点</div>
+  <div class="ctx-item" data-act="collapseAll">收起所有节点</div>
+</div>
+
+<!-- 对话框 -->
+<div id="dialogMask" class="dialog-mask" hidden>
+  <div class="dialog" role="dialog" aria-modal="true">
+    <div class="dialog-title" id="dialogTitle"></div>
+    <div class="dialog-body" id="dialogBody"></div>
+    <div class="dialog-footer"><button type="button" id="dialogOk">确定</button></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="js/vendor/codemirror.bundle.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
