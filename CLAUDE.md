@@ -1,22 +1,26 @@
 # jsonviewer
 
-自托管的 JSON 在线视图查看器，复刻 bejson.com/jsonviewernew 的三栏布局与功能（无广告、无统计）。
+Self-hosted online JSON viewer that replicates the three-pane layout and features of bejson.com/jsonviewernew (no ads, no analytics).
 
-## 结构
-- `main.go`：Go 标准库 HTTP 服务，`//go:embed web` 把前端打进单一二进制；参数与配置文件见 `-h` / `deploy/jsonviewer.conf`。
-- `web/`：前端。`index.html`、`css/style.css`、`js/app.js`（原生 JS，无框架）、`js/vendor/codemirror.bundle.js`（已打包的 CodeMirror 6）、`assets/ico/`（ExtJS 风格树图标）。
-- `web-src/codemirror-entry.js` + `package.json`：重建 CodeMirror 打包产物用（`npm i && npm run build:cm`），日常构建不需要 Node。
-- `deploy/`：systemd 单元与示例配置。`Makefile`：`make build` / `make release`。
+## Layout
+- `main.go`: Go standard-library HTTP server; `//go:embed web` bakes the frontend into a single binary. Flags accept short and long forms (`-l`/`--listen`, ...); see `-h` and `deploy/jsonviewer.conf` for the config-file format. Precedence: flags > config file > defaults.
+- `web/`: frontend. `index.html`, `css/style.css`, `js/app.js` (vanilla JS, no framework), `js/vendor/codemirror.bundle.js` (pre-bundled CodeMirror 6), `assets/ico/` (ExtJS-style tree icons).
+- `web-src/codemirror-entry.js` + `package.json`: only for rebuilding the CodeMirror bundle (`npm i && npm run build:cm`). Node is not needed for the normal Go build.
+- `deploy/`: systemd unit, example config, and `install.sh` (one-shot installer that pulls a GitHub Release).
+- `tests/e2e.js`: headless-Chrome end-to-end + large-JSON performance test (`npm run test:e2e`, `BIG=0` skips the perf part).
+- `.github/workflows/`: `ci.yml` (gofmt, vet, build, smoke, e2e) and `release.yml` (tag `v*` -> multi-platform binaries + service/conf/install.sh + SHA256SUMS).
+- `Makefile`: `make build` / `make release`. Docs: `README.md` (English) and `README_CN.md` (Chinese); keep both in sync.
 
-## 约定
-- 树视图（中间栏）样式保持 ExtJS 原样：18px 行高、11px arial、连接线与加减号图标、选中色 #d9e8fb。其他区域是清爽主题，可以自由调整。
-- 性能是硬性要求：树视图必须保持虚拟滚动，节点懒创建；编辑器用 CodeMirror（textarea 在大文本下不可用）；解析走原生 JSON.parse 快速路径，只有出现 16 位以上数字才走大数保护。
-- Go 只用标准库。前端不引框架、不走 CDN。
-- 验证：`make build` 后运行二进制，用 headless Chrome（puppeteer-core + 本机 google-chrome）跑功能与大 JSON 性能测试。
+## Conventions
+- The tree view (middle pane) keeps the original ExtJS look: 18px rows, 11px arial, elbow lines and plus/minus icons, selection color #d9e8fb. Everything else is a clean light theme and may be restyled freely.
+- Performance is a hard requirement: the tree must stay virtualized with lazily created nodes; the editor is CodeMirror (a textarea is unusable on large text); parsing uses the native JSON.parse fast path and only falls back to big-number protection when a 16+ digit number is present.
+- Go: standard library only. Frontend: no frameworks, no CDN.
+- Verification: `make build`, run the binary, then run the headless-Chrome tests (puppeteer-core + local google-chrome).
+- **Never commit or push unless the user explicitly asks for it in the current request.** Leave changes in the working tree and report them; do not create tags or releases on your own either.
 
-## 模型分工（子代理）
-- 规划、设计、方案取舍、评审 → `architect`（Fable，只读顾问）。非平凡改动先让它出方案。
-- 编码实现、修 bug、重构 → `coder`（Opus）。主会话默认模型也是 Opus（.claude/settings.json）。
-- README、部署文档、配置说明等 → `doc-writer`（Sonnet）。
-- 跑测试/构建、git commit/push 等确定性操作 → `ops`（Haiku）。
-- 主会话遇到需要深入思考的规划问题时使用 advisor（advisorModel = fable）。
+## Model routing (subagents)
+- Planning, design, trade-offs, reviews -> `architect` (Fable, read-only advisor). Get a plan from it before any non-trivial change.
+- Implementation, bug fixes, refactoring -> `coder` (Opus). The main session model is also Opus (`.claude/settings.json`).
+- README, deployment docs, config docs -> `doc-writer` (Sonnet).
+- Running tests/builds, and git commit/push when the user asks -> `ops` (Haiku).
+- For hard planning questions in the main session use the advisor (`advisorModel = fable`).
