@@ -2,22 +2,114 @@
 
 [English](README.md) | 简体中文
 
-自托管的 JSON 在线视图查看器，复刻 [bejson.com](https://www.bejson.com/jsonviewernew) 的三栏布局与交互，Go 标准库实现，单一二进制，前端通过 `go:embed` 打包进二进制，无需额外部署静态资源，也没有广告和统计。
+自托管的 **JSON / YAML / TOML / XML** 在线视图查看器，复刻 [bejson.com](https://www.bejson.com/jsonviewernew) 的三栏布局与交互，并支持四种格式互转。Go 标准库实现，单一二进制，前端通过 `go:embed` 打包进二进制，无需额外部署静态资源，也没有广告和统计。所有解析与转换都在浏览器内完成，粘贴的内容不会上传。
 
 ## 功能
 
-- **三栏布局**：左栏「JSON数据」输入、中栏「视图」树形展示、右栏「属性」查看当前选中节点的详情。
-- **左栏工具**：复制、格式化、删除空格、删除空格并转义、去除转义。
+- **四种格式**：JSON、YAML、TOML、XML。粘贴后自动识别（左栏标题行的格式下拉显示「自动 · YAML」这样的徽标），也可手动指定，手动选择会被记住（同一浏览器会话内）。详见下文「多格式与转换」。
+- **格式互转**：中栏有「树视图 | 转换」标签页。转换页给出只读结果，可切换目标格式、复制、下载、「应用到左侧」（Ctrl+Z 可撤销）；有损转换时显示提示条并可查看详情；选项含缩进、XML 根元素名、XML 推断类型。
+- **三栏布局**：左栏「JSON数据」输入（标题随当前格式显示为「YAML数据」等）、中栏「视图」树形展示、右栏「属性」查看当前选中节点的详情。
+- **左栏工具**：复制、格式化、删除空格、删除空格并转义、去除转义；按钮随格式启用或禁用（见下文矩阵）。YAML / TOML 的「格式化」是解析后重新输出，不保留注释（会弹 toast 提示，Ctrl+Z 可撤销）。
 - **中栏（视图）**：
   - 查找框，支持「上一个 / 下一个」定位匹配节点；
   - 「全部展开 / 全部收缩」；
   - 右键菜单：复制 Key、复制 Value、复制 Key+Value、展开/收起当前子节点、展开/收起全部。
 - **右栏属性表**：以「名称 / 值」表格列出选中节点（叶子节点则取其父节点）的所有直接子项，子对象与数组显示为 `...`。
-- **大数字不丢精度**：超过 16 位的数字（超出 JS `Number` 安全整数范围）按字符串处理，不会被四舍五入或截断。
-- **出错定位**：JSON 解析失败时，会提示出错的行号、列号，并将编辑器光标自动定位到出错位置。
+- **大数字不丢精度**：16 位及以上的数字（超出 JS `Number` 安全整数范围）保留原文，不会被四舍五入或截断（四种格式都适用）。
+- **出错定位**：解析失败时，会提示出错的行号、列号，并将编辑器光标自动定位到出错位置（XML 的位置是近似值）。
 - **大 JSON 性能**：树视图采用虚拟滚动、节点懒创建，可流畅处理超大文件。实测约 30MB 的 JSON 解析耗时约 1 秒，280 万行全部展开约 0.5 秒。
 - **编辑器**：基于 CodeMirror 6。`Ctrl+Enter` 立即解析当前内容，`Ctrl+F` 打开文本查找，`Tab` 缩进 4 个空格。
 - **可选登录验证与简单用户管理**：默认不需要登录；开启后支持多用户、管理员权限、会话管理与密码找回，详见下文「登录验证（可选）」。
+
+## 多格式与转换
+
+完整设计见 [docs/DESIGN_CN.md](docs/DESIGN_CN.md) 第二部分。
+
+### 左栏工具按钮随格式启用或禁用
+
+| 按钮 | JSON | YAML | TOML | XML |
+| --- | --- | --- | --- | --- |
+| 复制 | 可用 | 可用 | 可用 | 可用 |
+| 格式化 | 可用（字符扫描，对非法 JSON 也能工作） | 可用（解析后重排，不保留注释） | 可用（同 YAML） | 可用（DOM 重排缩进，保留注释、CDATA、处理指令） |
+| 删除空格 | 可用 | 禁用（缩进有语义） | 禁用（换行有语义） | 可用（去除元素间的空白） |
+| 删除空格并转义 | 可用 | 禁用 | 禁用 | 禁用 |
+| 去除转义 | 可用 | 禁用 | 禁用 | 禁用 |
+
+格式化结果与原文相同时，不更新文本也不提示。
+
+### 自动识别规则
+
+手动指定的格式永远优先，且不会回退到别的格式。自动模式按以下顺序判断（看第一个非空白字符）：
+
+| 条件 | 结果 |
+| --- | --- |
+| 以 `<` 开头 | XML |
+| 以 `{` 开头 | JSON（失败就报 JSON 错误，不会改按 YAML 重试） |
+| 以 `[` 开头 | 首行是 TOML 表头（`[a.b]` / `[[a]]`，裸键，首个键不是纯数字或 `true`/`false`/`null`）判为 TOML，否则 JSON |
+| 以 `---`、`%YAML`、`%TAG` 开头 | YAML |
+| 其余 | 扫描前 8 KB 内最多 50 个有效行：TOML 信号（表头，或 `=` 出现在 `: ` 之前）多于 YAML 信号（`- ` 开头，或 `: ` 出现在 `=` 之前）判 TOML；有 YAML 信号判 YAML |
+| 两边信号都为 0 | `JSON.parse` 成功判 JSON（如 `123` 这类标量），否则 YAML |
+
+识别错了时，错误对话框会说明当前按哪种格式解析，在格式下拉里手动选对即可。
+
+### XML 映射约定
+
+XML 用浏览器原生 `DOMParser` 解析，映射为与其他格式相同的树模型：
+
+| XML | 模型 |
+| --- | --- |
+| 文档 | `{ 根元素名: 根元素值 }`，根元素名是唯一的顶层键 |
+| 属性 | 键 `@名`（字符串），排在子元素之前 |
+| 与属性或子元素并存的文本 | 键 `#text` |
+| 同名兄弟元素 | 数组；只出现一次时**不是**数组 |
+| 空元素 `<a/>` | `""` |
+| 值 | 默认全是字符串（在选项里开启「XML 推断类型」可得到数字与布尔；16 位以上数字保留原文） |
+| 命名空间 | 前缀原样保留在键名中（`soap:Envelope`），`xmlns:*` 当普通属性 |
+| 注释、处理指令、DOCTYPE | 丢弃（提示条会说明） |
+| XML 声明 | 丢弃；输出 XML 时固定以 `<?xml version="1.0" encoding="UTF-8"?>` 开头 |
+
+```xml
+<book id="1">
+  <title>三体</title>
+  <tag>科幻</tag>
+  <tag>长篇</tag>
+  <stock/>
+</book>
+```
+
+映射为：
+
+```json
+{ "book": { "@id": "1", "title": "三体", "tag": ["科幻", "长篇"], "stock": "" } }
+```
+
+转为 XML 时：顶层是只有一个键且该键值不是数组的对象，就用该键作根元素；否则包一层 `<root>`（名字可在选项里改）。数组写成以父键名重复的元素（数组里嵌数组和顶层数组使用 `<item>`）。
+
+### 转换标签页
+
+- 转换的源是左栏，除非点「应用到左侧」，否则不会改动源文本。默认目标：源是 JSON 时为 YAML，否则为 JSON。
+- 停在树视图标签时不做任何转换；切到转换标签、切换目标或选项、左侧重新解析成功时才计算。
+- 提示条：灰色文字是由源和目标格式决定的固有损失（如「注释不保留」）；警告色是与数据有关的实际损失，附数量和路径（如 `$.a.b[3]`），「详情」最多列 50 条。**与数据有关的损失一律会提示，不会静默丢数据。**
+- 「下载」在本地保存 `converted.<扩展名>`，不经过服务端。「应用到左侧」用一次可撤销的操作（Ctrl+Z）替换左侧文本；自动模式保持自动识别，手动模式则切到目标格式。
+- 选项（保存在 `localStorage`）：缩进（2 / 4，默认 JSON 4、YAML 2、XML 4，TOML 无缩进）、XML 根元素名（默认 `root`，仅在需要包装时使用）、XML 推断类型（仅源为 XML 时显示，默认关）。
+
+### 转换时的主要损失
+
+| 情形 | 结果 |
+| --- | --- |
+| 注释（YAML / TOML / XML 源） | 不保留；YAML 锚点按值展开、标签丢弃；XML 的注释、处理指令、DOCTYPE、CDATA 标记丢弃 |
+| 目标 TOML | 无 `null`：值为 `null` 的键与数组里的 `null` 元素被丢弃（后续下标前移）；顶层数组包到 `items` 键下、顶层标量包到 `value` 键下；键序调整（普通键在前，表在后）；16 位以上的非整数数字转为双精度浮点 |
+| 目标 XML | 数字、布尔、null 变为文本；空数组丢弃；单元素数组读回时是单个元素；非法键名被改写（`first name` 变 `first_name`）；XML 不允许的控制字符替换为 U+FFFD |
+| 源 XML | 值全是字符串（除非开了推断类型）；单个元素与数组无法区分；混合内容与子元素的相对顺序丢失；不连续的同名元素被归并进同一数组 |
+| 目标 JSON | `inf` / `nan` 变 `null`；TOML 日期变字符串 |
+| TOML 到 TOML / JSON | `1.0` 变 `1`（整数与浮点不区分） |
+
+### 大数、日期与 YAML 语义
+
+- 16 位以上的数字在 JSON、YAML、TOML（超过 53 位的整数）和 XML（开启推断类型时）中都保留原文，写回时原样输出。TOML 超过 17 位有效数字的浮点仍会丢精度（所用库没有对应选项，属已知限制）。
+- TOML 日期时间用单独的紫色图标显示，写回时不带引号；小数秒会补齐为三位。输出为 YAML 时是不带引号的标量，按 YAML 1.2 读回是字符串。
+- YAML 按 **1.2 core** 语义：`yes` / `no` / `on` 是字符串，日期是字符串。递归别名与别名炸弹（展开后超过 500 万个节点）会被拒绝；多文档显示为数组（根标签「YAML（N 个文档）」）；重复键与复合键报错；整数形式的键排在最前，与 JSON 一致。
+- 非 JSON 文本超过 20 MB（按字符数计）时，解析或转换前会弹确认框（给出预计耗时）；耗时较长时先显示「正在解析… / 正在转换…」。JSON 的解析本身不受此限制（对超大 JSON 做转换时同样会先确认）。
 
 ## 构建
 
@@ -36,6 +128,7 @@ make release   # 交叉编译 linux/amd64、linux/arm64，产物在 dist/ 目录
 make build
 npm install            # 只装 puppeteer-core 等开发依赖
 npm run test:e2e       # 功能 + 大 JSON 性能检查；BIG=0 npm run test:e2e 可跳过性能部分
+npm run test:formats   # YAML / TOML / XML 的解析、识别、转换与损失表驱动测试（同样需要已编译的二进制和 Chrome）
 ```
 
 `release` 由 `linux-amd64`、`linux-arm64` 两个目标组成，也可以单独执行其中之一。编译时会通过 `-ldflags -X main.version=...` 注入版本号（默认取 `git describe`，取不到则为 `dev`）。
@@ -96,6 +189,10 @@ access_log = false
 
 # 用户文件；不设 users_file 时默认为配置文件同目录下的 users.json
 # users_file = /etc/jsonviewer/users.json
+
+# 可信反向代理（逗号分隔，单个 IP 或 CIDR）。仅当直连来源在此列表内才信任
+# X-Forwarded-For / X-Real-IP，用于登录限速与日志中的真实客户端 IP
+# trusted_proxies = 127.0.0.1
 ```
 
 然后用 `--config` 指定该文件启动：
@@ -170,7 +267,7 @@ sudo systemctl enable --now jsonviewer
    sudo systemctl restart jsonviewer
    ```
 
-   也可以重新执行一键安装脚本（可加 `-v` 指定版本）来更新二进制，配置文件不会被覆盖，然后执行 `sudo systemctl restart jsonviewer`。
+   也可以重新执行一键安装脚本（始终安装最新 Release）来更新二进制，配置文件不会被覆盖，然后执行 `sudo systemctl restart jsonviewer`。
 
 `deploy/jsonviewer.service` 默认以 `jsonviewer` 用户运行，并开启了较严格的安全加固（`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp` 等）。如果要监听 1024 以下的特权端口（如 80/443），需要在 unit 文件中取消下面这一行的注释，否则非 root 用户无法绑定该端口：
 
@@ -232,19 +329,28 @@ location / {
 
 ## 重建前端依赖（可选）
 
-前端使用的 CodeMirror 6 打包产物已经提交在 `web/js/vendor/codemirror.bundle.js`，日常构建 Go 二进制（`make build`）不需要 Node 环境。只有在需要升级 CodeMirror 版本或修改 `web-src/codemirror-entry.js` 时才需要重新打包：
+前端使用的第三方打包产物已经提交在 `web/js/vendor/` 下，日常构建 Go 二进制（`make build`）不需要 Node 环境。只有在升级依赖或修改 `web-src/` 下的入口文件时才需要重新打包：
 
 ```bash
 npm install
-npm run build:cm
+npm run build:vendor   # 一次生成全部三个产物
 ```
 
-产物会重新生成到 `web/js/vendor/codemirror.bundle.js`，之后正常 `make build` 即可把新产物打进二进制。
+也可以单独重建其中一个：
+
+| 脚本 | 入口 | 产物 |
+| --- | --- | --- |
+| `npm run build:cm` | `web-src/codemirror-entry.js` | `web/js/vendor/codemirror.bundle.js`（CodeMirror 6，含 JSON / YAML / XML / TOML 高亮） |
+| `npm run build:yaml` | `web-src/yaml-entry.js` | `web/js/vendor/yaml.bundle.js`（js-yaml） |
+| `npm run build:toml` | `web-src/toml-entry.js` | `web/js/vendor/toml.bundle.js`（smol-toml） |
+
+YAML 与 TOML 解析库按需懒加载：首次识别到 YAML / TOML，或选其为转换目标时才请求对应的包，纯 JSON 会话不会请求它们。XML 用浏览器原生 `DOMParser`，没有对应的包。之后正常 `make build` 即可把新产物打进二进制。
 
 ## 致谢与许可
 
 - 三栏布局与中间栏树视图的图标风格参考自 [bejson.com](https://www.bejson.com/) 的 jsonviewer（基于 ExtJS 3 实现）。
 - 编辑器使用 [CodeMirror 6](https://codemirror.net/)，遵循 MIT 协议。
+- YAML 解析与输出使用 [js-yaml](https://github.com/nodeca/js-yaml)（MIT）；TOML 使用 [smol-toml](https://github.com/squirrelchat/smol-toml)（BSD-3-Clause）。
 - 本项目仅供个人自托管使用。
 </content>
 </invoke>

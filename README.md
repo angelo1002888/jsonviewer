@@ -2,22 +2,114 @@
 
 English | [简体中文](README_CN.md)
 
-A self-hosted JSON viewer that replicates the three-pane layout and interactions of [bejson.com](https://www.bejson.com/jsonviewernew)'s jsonviewer. Implemented with the Go standard library as a single binary; the frontend is embedded via `go:embed`, so no extra static assets need to be deployed, and there are no ads or analytics.
+A self-hosted viewer for **JSON, YAML, TOML and XML** that replicates the three-pane layout and interactions of [bejson.com](https://www.bejson.com/jsonviewernew)'s jsonviewer, with conversion between the four formats. Implemented with the Go standard library as a single binary; the frontend is embedded via `go:embed`, so no extra static assets need to be deployed, and there are no ads or analytics. All parsing and conversion happens in the browser; pasted content is never uploaded.
 
 ## Features
 
-- **Three-pane layout**: left pane "JSON Data" for input, middle pane "View" for the tree display, right pane "Properties" for details of the currently selected node.
-- **Left pane tools**: copy, format, remove whitespace, remove whitespace and escape, unescape.
+- **Four formats**: JSON, YAML, TOML and XML. The format is detected automatically after pasting (the format dropdown in the left pane's title row shows e.g. "Auto · YAML"); you can also pick one manually, and the choice is remembered (per browser session). See "Formats and conversion" below.
+- **Format conversion**: the middle pane has "Tree view | Convert" tabs. The Convert tab shows a read-only result with a target-format switch, copy, download, "apply to left" (undoable with Ctrl+Z), a hint bar for lossy conversions with details, and options (indent / XML root element name / XML infer types).
+- **Three-pane layout**: left pane "JSON Data" (the title follows the current format: "YAML Data", ...) for input, middle pane "View" for the tree display, right pane "Properties" for details of the currently selected node.
+- **Left pane tools**: copy, format, remove whitespace, remove whitespace and escape, unescape. Buttons are enabled or disabled depending on the format (see the matrix below). Format for YAML/TOML re-emits the parsed data, so comments are not kept (a toast says so; Ctrl+Z undoes it).
 - **Middle pane (View)**:
   - A search box with "Previous / Next" to jump between matching nodes;
   - "Expand All / Collapse All";
   - Right-click menu: copy Key, copy Value, copy Key+Value, expand/collapse the current subtree, expand/collapse all.
 - **Right pane properties table**: lists all direct children of the selected node (or its parent, if the selection is a leaf) as a "Name / Value" table; nested objects and arrays are shown as `...`.
-- **No precision loss for large numbers**: numbers with more than 16 digits (outside JS `Number`'s safe integer range) are handled as strings, so they are never rounded or truncated.
-- **Error location**: when JSON parsing fails, the line and column of the error are shown, and the editor cursor is automatically moved to the error position.
+- **No precision loss for large numbers**: numbers with 16 or more digits (outside JS `Number`'s safe integer range) are kept as their original text, so they are never rounded or truncated (in all four formats).
+- **Error location**: when parsing fails, the line and column of the error are shown, and the editor cursor is automatically moved to the error position (for XML the position is approximate).
 - **Large JSON performance**: the tree view uses virtual scrolling with lazy node creation, so very large files stay responsive. Benchmarks: a ~30MB JSON file parses in about 1 second, and expanding all 2.8 million lines takes about 0.5 seconds.
 - **Editor**: based on CodeMirror 6. `Ctrl+Enter` parses the current content immediately, `Ctrl+F` opens text search, `Tab` indents 4 spaces.
 - **Optional login authentication with simple user management**: no login is required by default; when enabled, it supports multiple users, an admin role, session management, and password recovery — see "Authentication (optional)" below.
+
+## Formats and conversion
+
+Full design: [docs/DESIGN_CN.md](docs/DESIGN_CN.md) (Chinese), Part 2.
+
+### Left pane tools by format
+
+| Button | JSON | YAML | TOML | XML |
+| --- | --- | --- | --- | --- |
+| Copy | yes | yes | yes | yes |
+| Format | yes (character scan, works on invalid JSON too) | yes (parse then re-emit; comments not kept) | yes (same as YAML) | yes (DOM re-indent; keeps comments, CDATA, processing instructions) |
+| Remove whitespace | yes | disabled (indentation is significant) | disabled (newlines are significant) | yes (removes whitespace between elements) |
+| Remove whitespace and escape | yes | disabled | disabled | disabled |
+| Unescape | yes | disabled | disabled | disabled |
+
+If formatting yields the same text, nothing is changed and no toast is shown.
+
+### Auto detection
+
+A manual choice always wins and never falls back to another format. In auto mode, the first non-blank character decides (checked in this order):
+
+| Condition | Result |
+| --- | --- |
+| Starts with `<` | XML |
+| Starts with `{` | JSON (a failure is reported as a JSON error, never retried as YAML) |
+| Starts with `[` | TOML if the first line is a table header (`[a.b]` / `[[a]]`, bare keys, first key not a number or `true`/`false`/`null`), otherwise JSON |
+| Starts with `---`, `%YAML` or `%TAG` | YAML |
+| Otherwise | Scan up to 50 content lines in the first 8 KB: more TOML signals (table header, or `=` before `: `) than YAML signals (`- ` item, or `: ` before `=`) means TOML; any YAML signal means YAML |
+| No signals | JSON if `JSON.parse` succeeds (bare scalars such as `123`), otherwise YAML |
+
+If the guess is wrong, the error dialog says which format was assumed; pick the right one in the dropdown.
+
+### XML mapping
+
+XML is parsed with the browser's native `DOMParser` and mapped to the same tree model as the other formats:
+
+| XML | Model |
+| --- | --- |
+| Document | `{ rootName: rootValue }`, the root element name is the only top-level key |
+| Attribute | key `@name` (string), placed before child elements |
+| Text next to attributes or children | key `#text` |
+| Sibling elements with the same name | an array; a single element is **not** an array |
+| Empty element (`<a/>`) | `""` |
+| Values | all strings (turn on "XML infer types" in the options to get numbers / booleans; 16+ digit numbers stay raw text) |
+| Namespaces | prefixes are kept verbatim in names (`soap:Envelope`); `xmlns:*` is an ordinary attribute |
+| Comments, processing instructions, DOCTYPE | dropped (reported in the hint bar) |
+| XML declaration | dropped; XML output always starts with `<?xml version="1.0" encoding="UTF-8"?>` |
+
+```xml
+<book id="1">
+  <title>Three-Body</title>
+  <tag>sci-fi</tag>
+  <tag>novel</tag>
+  <stock/>
+</book>
+```
+
+becomes
+
+```json
+{ "book": { "@id": "1", "title": "Three-Body", "tag": ["sci-fi", "novel"], "stock": "" } }
+```
+
+When converting to XML, a top-level object with a single non-array key uses that key as the root; otherwise the data is wrapped in `<root>` (name configurable in the options). Arrays become repeated elements named after the parent key (`<item>` inside arrays and for top-level arrays).
+
+### Conversion tab
+
+- Source of conversion is the left pane; the source text is never changed unless you click "Apply to left". Default target: YAML when the source is JSON, otherwise JSON.
+- Nothing is computed while the tree tab is shown; results are computed when you open the tab, change the target or options, or the left side is re-parsed.
+- Hint bar: gray text for losses inherent to the source/target pair (e.g. "comments are not kept"); warning color for data-dependent losses, with counts and paths (e.g. `$.a.b[3]`). "Details" lists up to 50 entries. **Data-dependent losses are always reported, never silently dropped.**
+- "Download" saves `converted.<ext>` locally (no server involved). "Apply to left" replaces the left text in one undoable step (Ctrl+Z); in auto mode detection stays on, in manual mode the format switches to the target.
+- Options (stored in `localStorage`): indent (2 / 4; defaults JSON 4, YAML 2, XML 4; TOML has none), XML root element name (default `root`, only used when wrapping is needed), XML infer types (shown when the source is XML, default off).
+
+### Main losses when converting
+
+| Case | What happens |
+| --- | --- |
+| Comments (YAML / TOML / XML source) | not kept; YAML anchors are expanded, tags dropped; XML comments, processing instructions, DOCTYPE and CDATA marks dropped |
+| Target TOML | no `null`: keys with `null` and `null` array items are dropped (later indexes shift); a top-level array is wrapped under `items`, a scalar under `value`; keys are reordered (plain keys first, then tables); non-integer 16+ digit numbers become doubles |
+| Target XML | numbers / booleans / null become text; empty arrays are dropped; single-element arrays read back as a single element; invalid names are rewritten (`first name` becomes `first_name`); XML-illegal control characters become U+FFFD |
+| Source XML | all values are strings (unless infer types is on); single element vs array is ambiguous; mixed content loses its order relative to child elements; non-adjacent same-name elements are merged into one array |
+| Target JSON | `inf` / `nan` become `null`; TOML dates become strings |
+| TOML to TOML / JSON | `1.0` becomes `1` (integer and float are not distinguished) |
+
+### Big numbers, dates and YAML semantics
+
+- Numbers with 16+ digits are kept as original text in JSON, YAML, TOML (integers beyond 53 bits) and XML (with infer types), and are written back verbatim. TOML floats with more than 17 significant digits still lose precision (known limitation of the library).
+- TOML date/time values are shown with their own purple icon and written without quotes; fractional seconds are normalized to three digits. In YAML output they are unquoted scalars, which YAML 1.2 reads back as strings.
+- YAML uses the **1.2 core** schema: `yes` / `no` / `on` are strings, dates are strings. Recursive aliases and alias bombs (more than 5 million nodes after expansion) are rejected; multi-document files show as an array ("YAML (N documents)"); duplicate keys and complex keys are errors. Integer-like keys are listed first, as in JSON.
+- Non-JSON text larger than 20 MB (counted in characters) asks for confirmation before parsing, and any source that large asks before converting (with an estimated time); slow parses or conversions show a "parsing… / converting…" message first (the UI text is Chinese, as is the rest of the viewer). Parsing JSON itself is never subject to this prompt.
 
 ## Build
 
@@ -36,6 +128,7 @@ End-to-end tests (requires Google Chrome installed locally; the script starts th
 make build
 npm install            # installs dev dependencies such as puppeteer-core only
 npm run test:e2e       # functional + large-JSON performance checks; BIG=0 npm run test:e2e skips the performance part
+npm run test:formats   # table-driven YAML / TOML / XML parse, detect, convert and loss tests (also needs the built binary and Chrome)
 ```
 
 `release` consists of the `linux-amd64` and `linux-arm64` targets, which can also be run individually. The version string is injected at build time via `-ldflags -X main.version=...` (defaults to `git describe`, falling back to `dev` if unavailable).
@@ -96,6 +189,10 @@ access_log = false
 
 # 用户文件；不设 users_file 时默认为配置文件同目录下的 users.json
 # users_file = /etc/jsonviewer/users.json
+
+# 可信反向代理（逗号分隔，单个 IP 或 CIDR）。仅当直连来源在此列表内才信任
+# X-Forwarded-For / X-Real-IP，用于登录限速与日志中的真实客户端 IP
+# trusted_proxies = 127.0.0.1
 ```
 
 (The generated file's own comments are in Chinese regardless of which README you're reading — this is the literal output of `--example-config`.)
@@ -172,7 +269,7 @@ The script is also attached to each GitHub Release, so you can download it first
    sudo systemctl restart jsonviewer
    ```
 
-   Alternatively, re-run the quick install script (optionally with `-v` to pin a version) to update the binary; the existing config file is never overwritten. Then run `sudo systemctl restart jsonviewer`.
+   Alternatively, re-run the quick install script (it always installs the latest release) to update the binary; the existing config file is never overwritten. Then run `sudo systemctl restart jsonviewer`.
 
 `deploy/jsonviewer.service` runs as the `jsonviewer` user by default and enables fairly strict hardening (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, etc.). To listen on a privileged port below 1024 (e.g. 80/443), uncomment the following line in the unit file; otherwise a non-root user cannot bind to that port:
 
@@ -234,18 +331,27 @@ When authentication is enabled (`auth = true`), also set `trusted_proxies = 127.
 
 ## Rebuilding frontend dependencies (optional)
 
-The bundled CodeMirror 6 build used by the frontend is already committed at `web/js/vendor/codemirror.bundle.js`, so building the Go binary day-to-day (`make build`) does not require Node. You only need to rebuild it when upgrading the CodeMirror version or modifying `web-src/codemirror-entry.js`:
+The third-party frontend bundles are already committed under `web/js/vendor/`, so building the Go binary day-to-day (`make build`) does not require Node. You only need to rebuild them when upgrading a dependency or modifying the entry files in `web-src/`:
 
 ```bash
 npm install
-npm run build:cm
+npm run build:vendor   # all three bundles
 ```
 
-This regenerates `web/js/vendor/codemirror.bundle.js`; a subsequent `make build` will embed the new bundle into the binary.
+Or rebuild a single one:
+
+| Script | Entry | Output |
+| --- | --- | --- |
+| `npm run build:cm` | `web-src/codemirror-entry.js` | `web/js/vendor/codemirror.bundle.js` (CodeMirror 6 with JSON / YAML / XML / TOML highlighting) |
+| `npm run build:yaml` | `web-src/yaml-entry.js` | `web/js/vendor/yaml.bundle.js` (js-yaml) |
+| `npm run build:toml` | `web-src/toml-entry.js` | `web/js/vendor/toml.bundle.js` (smol-toml) |
+
+The YAML and TOML parser bundles are loaded lazily, only when YAML / TOML is first detected or chosen as a conversion target; a JSON-only session never requests them. XML uses the browser's native `DOMParser`, so it needs no bundle. A subsequent `make build` embeds the new bundles into the binary.
 
 ## Acknowledgments and license
 
 - The three-pane layout and the middle-pane tree view's icon style are based on [bejson.com](https://www.bejson.com/)'s jsonviewer (built on ExtJS 3).
 - The editor uses [CodeMirror 6](https://codemirror.net/), licensed under MIT.
+- YAML parsing and output use [js-yaml](https://github.com/nodeca/js-yaml) (MIT); TOML uses [smol-toml](https://github.com/squirrelchat/smol-toml) (BSD-3-Clause).
 - This project is intended for personal, self-hosted use only.
 </content>

@@ -32,8 +32,13 @@ jobs:
           curl -fsS -o /dev/null http://127.0.0.1:18080/
           curl -fsS -o /dev/null http://127.0.0.1:18080/js/app.js
           curl -fsS -o /dev/null http://127.0.0.1:18080/js/vendor/codemirror.bundle.js
+          curl -fsS -o /dev/null http://127.0.0.1:18080/js/formats.js
+          curl -fsS -o /dev/null http://127.0.0.1:18080/js/vendor/yaml.bundle.js
+          curl -fsS -o /dev/null http://127.0.0.1:18080/js/vendor/toml.bundle.js
           kill %1
       - name: e2e (headless Chrome)
         run: |
           npm ci
           CHROME="$(which google-chrome || which chromium-browser || which chromium)" npm run test:e2e
+      - name: formats (headless Chrome)
+        run: CHROME="$(which google-chrome || which chromium-browser || which chromium)" npm run test:formats

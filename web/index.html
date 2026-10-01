@@ -9,9 +9,19 @@
 </head>
 <body>
 <div id="app">
-  <!-- 左：JSON 数据 -->
+  <!-- 左：源数据（JSON / YAML / TOML / XML） -->
   <section class="panel" id="leftPanel">
-    <header class="panel-header">JSON数据</header>
+    <header class="panel-header"><span id="leftTitle">JSON数据</span>
+      <label class="fmt-pick" title="源数据格式：自动识别或手动指定">格式:
+        <select id="fmtSelect">
+          <option value="auto">自动</option>
+          <option value="json">JSON</option>
+          <option value="yaml">YAML</option>
+          <option value="toml">TOML</option>
+          <option value="xml">XML</option>
+        </select>
+      </label>
+    </header>
     <div class="toolbar">
       <button type="button" id="btnCopy">复制</button>
       <span class="sep"></span>
@@ -33,6 +43,10 @@
   <!-- 中：视图 -->
   <section class="panel center" id="treePanel">
     <header class="panel-header"><span>视图</span>
+      <span class="view-tabs" role="tablist">
+        <button type="button" class="view-tab on" id="tabTree" data-tab="tree" role="tab" aria-selected="true">树视图</button>
+        <button type="button" class="view-tab" id="tabConvert" data-tab="convert" role="tab" aria-selected="false">转换</button>
+      </span>
       <span id="userMenu" class="user-menu" hidden>
         <button type="button" id="userBtn" aria-haspopup="true" aria-expanded="false"><span id="userName"></span><span class="caret"></span></button>
         <span id="userDrop" class="user-drop" hidden>
@@ -43,6 +57,7 @@
         </span>
       </span>
     </header>
+    <div class="tab-pane" id="treePane">
     <div class="toolbar">
       <span class="label">查找:</span>
       <input type="text" id="searchText" autocomplete="off">
@@ -59,6 +74,34 @@
     <div class="panel-body x-tree" id="treeBody">
       <div id="treeSpacer"><div id="treeLayer"></div></div>
     </div>
+    </div>
+    <!-- 转换标签：只读结果编辑器首次切到本标签时才创建 -->
+    <div class="tab-pane" id="convPane" hidden>
+      <div class="toolbar conv-toolbar">
+        <span class="label">转换为:</span>
+        <span class="seg" id="convTargets">
+          <button type="button" data-fmt="json">JSON</button>
+          <button type="button" data-fmt="yaml">YAML</button>
+          <button type="button" data-fmt="toml">TOML</button>
+          <button type="button" data-fmt="xml">XML</button>
+        </span>
+        <span class="sep"></span>
+        <button type="button" id="convCopy">复制</button>
+        <button type="button" id="convDownload">下载</button>
+        <button type="button" id="convApply" title="用转换结果替换左侧文本（Ctrl+Z 可撤销）">应用到左侧</button>
+        <button type="button" id="convOptBtn" aria-haspopup="true" aria-expanded="false">选项<span class="caret"></span></button>
+      </div>
+      <div class="conv-bar" id="convBar" hidden>
+        <span class="conv-bar-text" id="convBarText"></span>
+        <button type="button" class="link" id="convDetail">详情</button>
+      </div>
+      <div class="panel-body conv-body">
+        <div class="conv-msg" id="convMsg" hidden></div>
+        <div id="convEdit"></div>
+      </div>
+    </div>
+    <!-- 忙碌提示：预计耗时较长的解析在阻塞计算前先绘制出来 -->
+    <div id="busyTip" class="busy-tip" role="status" hidden></div>
   </section>
 
   <div class="splitter" id="splitRight"></div>
@@ -73,6 +116,16 @@
       </table>
     </div>
   </section>
+</div>
+
+<!-- 转换选项下拉（位置由 JS 按按钮计算，避免被面板裁剪） -->
+<div id="convOpts" class="conv-opts" hidden>
+  <div class="opt-row" id="optIndentRow"><span class="opt-label">缩进</span>
+    <span class="seg" id="optIndent"><button type="button" data-indent="2">2</button><button type="button" data-indent="4">4</button></span>
+    <span class="opt-note" id="optIndentNote"></span>
+  </div>
+  <div class="opt-row" id="optRootRow"><label><span class="opt-label">XML 根元素名</span><input type="text" id="optXmlRoot" autocomplete="off" spellcheck="false"></label></div>
+  <div class="opt-row" id="optInferRow"><label><input type="checkbox" id="optInfer"> XML 推断类型<span class="opt-note">（数字、true / false，重新解析左侧）</span></label></div>
 </div>
 
 <!-- 右键菜单 -->
@@ -93,6 +146,18 @@
     <div class="dialog-title" id="dialogTitle"></div>
     <div class="dialog-body" id="dialogBody"></div>
     <div class="dialog-footer"><button type="button" id="dialogOk">确定</button></div>
+  </div>
+</div>
+
+<!-- 确认对话框（大文本解析 / 转换前） -->
+<div id="confirmMask" class="dialog-mask" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmBody">
+    <div class="dialog-title" id="confirmTitle"></div>
+    <div class="dialog-body" id="confirmBody"></div>
+    <div class="dialog-footer">
+      <button type="button" class="secondary" id="confirmCancel">取消</button>
+      <button type="button" id="confirmOk">继续</button>
+    </div>
   </div>
 </div>
 
@@ -117,6 +182,7 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="js/vendor/codemirror.bundle.js"></script>
+<script src="js/formats.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
