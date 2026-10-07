@@ -1185,7 +1185,9 @@
       '<p>XML 映射约定：属性写成 <code>@名称</code>，有属性或子元素时文本写成 <code>#text</code>，同名的兄弟元素合并为数组。</p>',
       '<p>快捷键：<kbd>Ctrl</kbd>+<kbd>Enter</kbd> 立即解析；编辑区 <kbd>Tab</kbd> 缩进 4 个空格、<kbd>Ctrl</kbd>+<kbd>F</kbd> 在文本中查找；',
       '查找框 <kbd>Enter</kbd> 下一个、<kbd>Shift</kbd>+<kbd>Enter</kbd> 上一个。</p>',
-      '<p>树节点上右键可复制 Key / Value，或展开、收起子节点。超过 16 位的数字按原文显示，不会丢失精度。</p>'
+      '<p>树节点上右键可复制 Key / Value，或展开、收起子节点。超过 16 位的数字按原文显示，不会丢失精度。</p>',
+      '<p>源码：<a href="https://github.com/angelo1002888/jsonviewer" target="_blank" rel="noopener">https://github.com/angelo1002888/jsonviewer</a></p>',
+      '<p>隐私：所有内容只在浏览器内解析，不会上传到任何服务器；托管方只能看到普通的请求元数据（IP、UA），看不到你的数据。</p>'
     ].join(''));
   });
 

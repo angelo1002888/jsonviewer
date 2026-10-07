@@ -2,6 +2,7 @@
 /jsonviewer
 /jsonviewer.exe
 /dist/
+/dist-pages/
 *.test
 *.out
 coverage.*

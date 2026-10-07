@@ -2,6 +2,8 @@
 
 English | [简体中文](README_CN.md)
 
+Live demo: https://jsonviewer-c7d.pages.dev (static hosting; content is processed in the browser only and never uploaded)
+
 A self-hosted viewer for **JSON, YAML, TOML and XML** that replicates the three-pane layout and interactions of [bejson.com](https://www.bejson.com/jsonviewernew)'s jsonviewer, with conversion between the four formats. Implemented with the Go standard library as a single binary; the frontend is embedded via `go:embed`, so no extra static assets need to be deployed, and there are no ads or analytics. All parsing and conversion happens in the browser; pasted content is never uploaded.
 
 ## Features
@@ -19,6 +21,7 @@ A self-hosted viewer for **JSON, YAML, TOML and XML** that replicates the three-
 - **Error location**: when parsing fails, the line and column of the error are shown, and the editor cursor is automatically moved to the error position (for XML the position is approximate).
 - **Large JSON performance**: the tree view uses virtual scrolling with lazy node creation, so very large files stay responsive. Benchmarks: a ~30MB JSON file parses in about 1 second, and expanding all 2.8 million lines takes about 0.5 seconds.
 - **Editor**: based on CodeMirror 6. `Ctrl+Enter` parses the current content immediately, `Ctrl+F` opens text search, `Tab` indents 4 spaces.
+- **Static-site deployment**: the frontend can also be deployed as a purely static site, see [docs/DEMO_SITE_CN.md](docs/DEMO_SITE_CN.md) (Chinese).
 - **Optional login authentication with simple user management**: no login is required by default; when enabled, it supports multiple users, an admin role, session management, and password recovery — see "Authentication (optional)" below.
 
 ## Formats and conversion
@@ -353,5 +356,5 @@ The YAML and TOML parser bundles are loaded lazily, only when YAML / TOML is fir
 - The three-pane layout and the middle-pane tree view's icon style are based on [bejson.com](https://www.bejson.com/)'s jsonviewer (built on ExtJS 3).
 - The editor uses [CodeMirror 6](https://codemirror.net/), licensed under MIT.
 - YAML parsing and output use [js-yaml](https://github.com/nodeca/js-yaml) (MIT); TOML uses [smol-toml](https://github.com/squirrelchat/smol-toml) (BSD-3-Clause).
-- This project is intended for personal, self-hosted use only.
+- Licensed under the MIT License (see LICENSE).
 </content>

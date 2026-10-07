@@ -1,0 +1,76 @@
+name: Demo (Cloudflare Pages)
+
+# 推送 v* 标签即把 web/ 发布到公共演示站（与 Release 并行）；
+# 手动触发可重发任意 tag（回滚也可在 Cloudflare 面板 Deployments 里一键完成）。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要部署的 tag（留空为当前 ref）"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-pages
+  cancel-in-progress: false
+
+env:
+  PROJECT: jsonviewer          # Cloudflare Pages 项目名，须先在面板创建（Direct Upload）
+  SITE: https://jsonviewer-c7d.pages.dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: demo
+      url: ${{ env.SITE }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # 发布目录 = web/ + 平台专用文件；不改 web/，避免被 //go:embed 打进二进制
+      - name: assemble site
+        run: |
+          set -e
+          rm -rf dist-pages && mkdir dist-pages
+          cp -r web/. dist-pages/
+          cp deploy/pages/_headers deploy/pages/404.html deploy/pages/robots.txt deploy/pages/favicon.ico dist-pages/
+          test -f dist-pages/index.html
+          test -f dist-pages/js/vendor/codemirror.bundle.js
+          find dist-pages -type f | wc -l
+
+      # 标签 checkout 是 detached HEAD，wrangler 推断不出分支：必须显式 --branch=main
+      # （= 项目的 production branch），否则会变成预览部署。
+      - name: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            pages deploy dist-pages
+            --project-name=${{ env.PROJECT }}
+            --branch=main
+            --commit-dirty=true
+            --commit-hash=${{ github.sha }}
+            --commit-message="${{ inputs.ref || github.ref_name }}"
+
+      # 直传完成即生效；冒烟：页面与各包 200，api/me 必须是 404（不能是 SPA 回退的 200）
+      - name: smoke test
+        run: |
+          set -e
+          for i in 1 2 3 4 5 6; do
+            curl -fsS -o /dev/null "$SITE/" && break || sleep 10
+          done
+          for p in / /js/app.js /js/formats.js /css/style.css \
+                   /js/vendor/codemirror.bundle.js /js/vendor/yaml.bundle.js /js/vendor/toml.bundle.js; do
+            curl -fsS -o /dev/null "$SITE$p"
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$SITE/api/me")
+          [ "$code" = 404 ] || { echo "api/me 应为 404，实际 $code"; exit 1; }
+          curl -sI "$SITE/" | grep -i '^content-security-policy' || echo "（未设置 CSP 头）"   # 仅提示，不判失败

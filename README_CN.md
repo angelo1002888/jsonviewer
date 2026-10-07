@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+在线演示：https://jsonviewer-c7d.pages.dev（纯静态托管，内容只在浏览器处理，不上传）
+
 自托管的 **JSON / YAML / TOML / XML** 在线视图查看器，复刻 [bejson.com](https://www.bejson.com/jsonviewernew) 的三栏布局与交互，并支持四种格式互转。Go 标准库实现，单一二进制，前端通过 `go:embed` 打包进二进制，无需额外部署静态资源，也没有广告和统计。所有解析与转换都在浏览器内完成，粘贴的内容不会上传。
 
 ## 功能
@@ -19,6 +21,7 @@
 - **出错定位**：解析失败时，会提示出错的行号、列号，并将编辑器光标自动定位到出错位置（XML 的位置是近似值）。
 - **大 JSON 性能**：树视图采用虚拟滚动、节点懒创建，可流畅处理超大文件。实测约 30MB 的 JSON 解析耗时约 1 秒，280 万行全部展开约 0.5 秒。
 - **编辑器**：基于 CodeMirror 6。`Ctrl+Enter` 立即解析当前内容，`Ctrl+F` 打开文本查找，`Tab` 缩进 4 个空格。
+- **可作静态站部署**：前端也可直接作为纯静态站部署，见 [docs/DEMO_SITE_CN.md](docs/DEMO_SITE_CN.md)。
 - **可选登录验证与简单用户管理**：默认不需要登录；开启后支持多用户、管理员权限、会话管理与密码找回，详见下文「登录验证（可选）」。
 
 ## 多格式与转换
@@ -351,6 +354,6 @@ YAML 与 TOML 解析库按需懒加载：首次识别到 YAML / TOML，或选其
 - 三栏布局与中间栏树视图的图标风格参考自 [bejson.com](https://www.bejson.com/) 的 jsonviewer（基于 ExtJS 3 实现）。
 - 编辑器使用 [CodeMirror 6](https://codemirror.net/)，遵循 MIT 协议。
 - YAML 解析与输出使用 [js-yaml](https://github.com/nodeca/js-yaml)（MIT）；TOML 使用 [smol-toml](https://github.com/squirrelchat/smol-toml)（BSD-3-Clause）。
-- 本项目仅供个人自托管使用。
+- 本项目使用 MIT 许可证（见 LICENSE）。
 </content>
 </invoke>

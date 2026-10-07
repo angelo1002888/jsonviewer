@@ -140,10 +140,12 @@ flowchart LR
 | `web/assets/ico/` | ExtJS 风格树图标（肘形线、加减号、类型图标）与箭头图标；`purple.gif` 为日期节点图标 |
 | `web-src/codemirror-entry.js`、`yaml-entry.js`、`toml-entry.js` + `package.json` | 仅用于重建 vendor 包：`npm i && npm run build:vendor`，或单独 `build:cm` / `build:yaml` / `build:toml`（esbuild，iife，minify） |
 | `deploy/` | `jsonviewer.service`、`jsonviewer.conf`、`install.sh`、`nginx.conf.example` |
+| `deploy/pages/` | 公共演示站（Cloudflare Pages）的平台专用文件：`_headers`、`404.html`、`robots.txt`；不得放进 `web/`（否则会被 `go:embed` 打进二进制） |
+| `LICENSE` | MIT 许可证 |
 | `tests/e2e.js` | puppeteer-core + 本机 Chrome 的端到端与大 JSON 性能测试 |
 | `tests/formats.js` | 表驱动格式测试（`npm run test:formats`）：YAML / TOML / XML 解析、识别、格式化、互转、往返与损失 |
 | `auth_test.go`、`proxy_test.go` | Go 单元测试 |
-| `.github/workflows/` | `ci.yml`、`release.yml` |
+| `.github/workflows/` | `ci.yml`、`release.yml`、`pages.yml`（v* 标签时发布演示站） |
 | `Makefile` | `build`、`run`、`test`、`linux-amd64`、`linux-arm64`、`release`、`clean` |
 
 ---
@@ -806,6 +808,10 @@ flowchart LR
 | 备份 | 只需备份 `jsonviewer.conf` 与 `users.json` |
 | 启动失败 | 启用 `auth` 但进程无法写入 `users_file` 所在目录会在启动阶段报错退出（手动安装需自行 `chown jsonviewer:jsonviewer /etc/jsonviewer`） |
 
+#### 6.6 公共演示站（静态托管）
+
+前端的解析、转换都在浏览器内完成，后端只负责提供静态文件（认证为可选功能，演示站不启用），因此 `web/` 可原样作为纯静态站托管，无需任何服务端逻辑。部署流水线：`pages.yml` 在推送 `v*` 标签时，把 `web/` 与 `deploy/pages/`（`_headers`、`404.html`、`robots.txt`）拼成 `dist-pages/`，直传 Cloudflare Pages；它与 `release.yml` 并行运行，互不依赖。演示站须保持纯静态、不加统计。地址暂定 `https://jsonviewer-c7d.pages.dev`（项目名被占用时会变），详情见 [DEMO_SITE_CN.md](DEMO_SITE_CN.md)。
+
 ---
 
 ### 7. 构建、测试与发布
@@ -860,6 +866,7 @@ flowchart LR
 | --- | --- |
 | `ci.yml` | `ubuntu-24.04`；`actions/checkout@v7`、`actions/setup-go@v7`（`go-version-file: go.mod`，`cache: false`）；smoke 在 `127.0.0.1:18080` 请求 `/`、`/js/app.js`、`/js/vendor/codemirror.bundle.js`、`/js/formats.js`、`/js/vendor/yaml.bundle.js`、`/js/vendor/toml.bundle.js`；e2e 与 formats 两步都用 `which google-chrome` 或 `chromium` 找 Chrome（先 `npm ci` 一次） |
 | `release.yml` | 权限 `contents: write`；目标 `linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`、`windows/amd64`（`.exe`）；附件含二进制、`jsonviewer.service`、`jsonviewer.conf`、`install.sh`、`nginx.conf.example`、`SHA256SUMS`；使用 `softprops/action-gh-release@v3`；发布前不重跑测试 |
+| `pages.yml` | 与 `release.yml` 同为推送 `v*` 标签触发、并行运行；把 `web/` 与 `deploy/pages/` 拼成 `dist-pages/` 后直传 Cloudflare Pages（演示站，见 §6.6） |
 
 ---
 
