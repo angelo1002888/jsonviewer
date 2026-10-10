@@ -17,6 +17,7 @@ Self-hosted online viewer for JSON, YAML, TOML and XML (with conversion between 
 
 ## Conventions
 - The tree view (middle pane) keeps the ExtJS structure: 18px rows, elbow lines and plus/minus icons, selection color #d9e8fb; text is 12px monospace, vertically centered with the icons (user preference, 2026-09-26). Everything else is a clean light theme and may be restyled freely.
+- Responsive layout is driven by viewport width in three tiers: >1100px three panes, 801-1100px three narrower panes, <=800px single pane with the `#app[data-pane]` switch bar. Narrow-screen rules live together in the media queries in `style.css`; when a hidden pane is shown again it must be re-measured (`tree.invalidate()` / `view.requestMeasure()`, see `showPane` in `app.js`).
 - Performance is a hard requirement: the tree must stay virtualized with lazily created nodes; the editor is CodeMirror (a textarea is unusable on large text); parsing uses the native JSON.parse fast path and only falls back to big-number protection when a 16+ digit number is present.
 - JSON keeps the native `JSON.parse` fast path and must not load the yaml/toml bundles. Conversions must report data-dependent losses in the hint bar, never silently drop data.
 - Go: standard library only. Frontend: no frameworks, no CDN.

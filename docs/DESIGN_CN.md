@@ -17,7 +17,7 @@
   - [1. 概述](#1-概述)
   - [2. 总体架构](#2-总体架构)
   - [3. 目录与模块职责](#3-目录与模块职责)
-  - [4. 前端设计](#4-前端设计)
+  - [4. 前端设计](#4-前端设计)（含 §4.9 响应式布局）
   - [5. 服务端设计](#5-服务端设计)
   - [6. 部署与运维](#6-部署与运维)
   - [7. 构建、测试与发布](#7-构建测试与发布)
@@ -156,7 +156,7 @@ flowchart LR
 
 #### 4.1 页面布局
 
-`web/index.html` 为一页三栏，横向 flex 布局（`#app`，四周 4px 内边距）。
+`web/index.html` 为一页三栏，横向 flex 布局（`#app`，四周 4px 内边距）。下表为宽屏（> 1100px）的桌面布局；视口宽度 ≤ 1100px 时的栏宽缩窄与 ≤ 800px 的单栏切换见 §4.9。
 
 | 区域 | 默认宽度 | 内容 |
 | --- | --- | --- |
@@ -168,7 +168,7 @@ flowchart LR
 
 要点：
 
-- **分割条**：`makeSplitter` 拖动时改面板宽度，最小 120px，最大为 `window.innerWidth - 300`；松开鼠标后调用 `tree.scheduleRender()`。
+- **分割条**：`makeSplitter` 拖动时改面板宽度，最小 120px，最大为 `window.innerWidth - 300`；松开鼠标后调用 `tree.scheduleRender()`。窄屏（≤ 800px）下分割条隐藏。
 - **用户菜单**：位于中栏标题栏右侧 `#userMenu`，默认隐藏，仅当 `/api/me` 返回 `auth: true` 且已登录时显示；下拉框用 `position: fixed`，位置由 JS 按按钮计算（避免被面板裁剪），含「修改密码」、「用户管理」（仅管理员）、「退出登录」（POST 表单）。
 - **浮层**：右键菜单 `#ctxMenu`、通用对话框 `#dialogMask`、修改密码弹窗 `#pwdMask`、提示 `#toast`；`Escape` 关闭右键菜单、对话框、修改密码弹窗与用户菜单。
 - 页面脚本顺序：先加载 `codemirror.bundle.js`（提供 `window.CM`），再加载 `formats.js`（提供 `window.JV`），最后加载 `app.js`；`yaml.bundle.js` / `toml.bundle.js` 由 `formats.js` 按需插入 `<script>`。所有请求用相对路径（`api/me`、`api/password`、`login`、`logout`），因此在 `base_path` 子路径下也能工作。
@@ -473,6 +473,38 @@ flowchart TD
 | 启动 | 先 `fetch('api/me')`：`401` 跳转 `login`；非 OK 或网络失败按未启用登录处理；`auth` 为真且有用户则显示用户菜单、写入 `#csrfField` 并 `init(user)` |
 | 暂存恢复 | `sessionStorage` 键为 `jsonviewer_text:<用户名>`（未启用登录时为 `jsonviewer_text`）；手动指定的格式存于 `jsonviewer_fmt[:<用户名>]`（自动模式不存）；编辑器为空时才恢复；提交退出登录表单时删除该键 |
 | 修改密码弹窗 | `FormData` 去掉 `username`、追加 `csrf`，以 urlencoded 形式 `POST api/password`；`401` 跳转登录；成功后关闭弹窗并提示「密码已修改，其它设备需重新登录」 |
+
+#### 4.9 响应式布局
+
+按视口宽度（CSS 媒体查询）切换，不做设备 UA 检测；页面带 `<meta name="viewport" content="width=device-width, initial-scale=1">`。窄屏规则集中在 `style.css` 末尾的两个媒体查询中。
+
+| 视口宽度 | 布局 | 说明 |
+| --- | --- | --- |
+| > 1100px | 三栏 | 左栏 440px、右栏 300px，分割条可拖动（§4.1） |
+| 801–1100px（平板） | 三栏缩窄 | 左栏 320px、右栏 220px；用户拖过分割条写入的内联宽度优先 |
+| ≤ 800px（手机） | 单栏 | `#app` 变纵向 flex，顶部出现切换栏 `nav.pane-bar#paneBar`（按钮 `button.pane-tab`：`数据 \| 视图 \| 属性`）；`#app[data-pane=left\|center\|right]`（默认 `left`）决定显示哪一栏，其余栏 `display: none`；分割条隐藏；显示栏的 `flex` / `width` 用 `!important` 覆盖分割条写入的内联宽度（桌面窗口被拖窄时同样适用） |
+
+单栏下的其它调整：面板标题行与转换工具栏允许换行（避免格式下拉、标签、用户菜单被裁掉）；中栏内的「树视图 \| 转换」子标签照常可用；用户管理页（`templates/users.html`）的表格包在 `div.table-scroll` 中横向滚动，单元格不折行。树视图本身样式不变（18px 行、ExtJS 图标、等宽字体），双击行可展开 / 折叠。
+
+重测量：隐藏栏的 `clientHeight` 为 0，树在隐藏期间若重绘，行区间会按 0 高度算错，所以栏重新显示后必须重测量。
+
+- `showPane(name)`：设置 `#app` 的 `data-pane`，同步切换栏按钮的 `on` 与 `aria-selected`，关闭右键菜单、转换选项菜单与用户菜单，然后 `remeasure(name)`。
+- `remeasure(pane)`：左栏调编辑器 `view.requestMeasure()`；中栏在「转换」标签下调 `conv.view.requestMeasure()`，否则 `tree.invalidate()`（按真实高度重算行区间）；不传参数则重测所有栏。
+- `matchMedia('(max-width: 800px)')` 的 `change` 事件在跨越断点（进入或离开窄屏）时重测所有栏。
+- `window.jsonviewer.showPane('left' | 'center' | 'right')` 暴露给测试与调试。
+
+```mermaid
+flowchart TD
+  w["视口宽度变化"] --> bp{"断点"}
+  bp -->|"大于 1100px"| l1["三栏 440px / 300px，分割条可拖动"]
+  bp -->|"801 至 1100px"| l2["三栏 320px / 220px"]
+  bp -->|"800px 及以下"| l3["单栏 + 切换栏，data-pane 选栏"]
+  l3 --> sp["showPane 切换 data-pane"]
+  sp --> rm["remeasure: requestMeasure 或 tree.invalidate"]
+  bp -.->|"跨越 800px 的 change 事件"| rm
+```
+
+已知限制：iOS Safari 没有右键事件，树节点右键菜单在手机上不可用（复制 Key / Value 等需在桌面使用）。
 
 ---
 
@@ -845,6 +877,7 @@ flowchart LR
 | --- | --- |
 | 功能（未启用 auth） | 页面加载；根节点展开；大整数不丢精度；字符串引号与 HTML 转义；属性表；全部展开 / 收缩；双击展开折叠；查找命中、未命中；右键菜单 7 项；复制提示；格式化、删除空格、转义、去转义；粘贴与失焦自动解析；错误对话框含行列；分割条拖动 |
 | 性能（`BIG` 默认 200000） | 载入解析、全部展开且 DOM 行数受控、滚动到底、查找末尾节点、格式化、重新解析 |
+| 移动端布局 | 390x844 移动视口：无横向溢出；切换栏显示；数据 / 视图 / 属性三栏可切换；树有行；转换工具栏不溢出；属性表有行；恢复 1400x800 后三栏可见且重绘 |
 | 接口与错误 | 未启用登录时 `/api/me` 返回 `{"auth":false}` 且用户菜单隐藏；无页面错误 |
 | 登录验证（第二个实例） | 另起 `auth = true` 实例，监听 `0.0.0.0` 并通过本机局域网 IPv4 访问（模拟非安全上下文）；独立 BrowserContext；覆盖：未登录跳转 `/setup`、`app.js` 受保护而样式公开、创建管理员、用户菜单、`/api/me`、ETag 与 304、`/setup` 不再可用、`/account` 已移除、修改密码弹窗（错误与成功）、新增用户、不能删除自己、退出清除暂存内容、普通用户菜单与 `/admin/users` 403、连续 10 次错误后第 11 次 429、无页面错误 |
 

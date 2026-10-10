@@ -9,7 +9,14 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div id="app">
+<div id="app" data-pane="left">
+  <!-- 窄屏（≤ 800px）切换栏：一次只显示一栏；桌面宽度下由 CSS 隐藏 -->
+  <nav class="pane-bar" id="paneBar" role="tablist" aria-label="面板">
+    <button type="button" class="pane-tab on" data-pane="left" role="tab" aria-selected="true">数据</button>
+    <button type="button" class="pane-tab" data-pane="center" role="tab" aria-selected="false">视图</button>
+    <button type="button" class="pane-tab" data-pane="right" role="tab" aria-selected="false">属性</button>
+  </nav>
+
   <!-- 左：源数据（JSON / YAML / TOML / XML） -->
   <section class="panel" id="leftPanel">
     <header class="panel-header"><span id="leftTitle">JSON数据</span>

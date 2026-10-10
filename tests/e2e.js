@@ -668,6 +668,65 @@ async function authSuite(browser) {
       check('JSON ' + pf.conv.mb + 'MB 转 YAML（' + pf.conv.outMb + 'MB）< 3s', pf.conv.ms < 3000 && pf.conv.target === 'YAML' && pf.conv.head === 'users:\n  - id: 0\n', pf.conv.ms + 'ms ' + JSON.stringify(pf.conv.head));
     }
 
+    // ---------- 移动端布局：≤ 800px 单栏 + 顶部切换栏 ----------
+    {
+      console.log('移动端布局');
+      const raf2 = () => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+      await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+      await page.reload({ waitUntil: 'networkidle0' });
+      // 元素可见：offsetParent 非 null 且有尺寸
+      const vis = sel => page.$eval(sel, e => e.offsetParent !== null && e.getBoundingClientRect().width > 0);
+      let m = await page.evaluate(() => {
+        const bar = document.getElementById('paneBar'), tops = [...bar.querySelectorAll('button')].map(b => b.offsetTop);
+        return { sw: document.documentElement.scrollWidth, iw: window.innerWidth, leftW: document.getElementById('leftPanel').getBoundingClientRect().width, oneLine: new Set(tops).size === 1 && tops.length === 3 };
+      });
+      check('窄屏无横向溢出', m.sw <= m.iw, m.sw + ' <= ' + m.iw);
+      check('窄屏显示切换栏且不换行', (await vis('#paneBar')) && m.oneLine);
+      check('窄屏默认只显示数据栏且占满宽度', (await vis('#leftPanel')) && Math.abs(m.leftW - m.iw) <= 12 && !(await vis('#treePanel')) && !(await vis('#gridPanel')), m.leftW + ' / ' + m.iw);
+      m = await page.evaluate(() => {
+        const p = document.getElementById('leftPanel');
+        p.style.width = '700px'; p.style.flexBasis = '700px';   // 模拟桌面上拖过分割条后写入的内联宽度
+        const w = p.getBoundingClientRect().width, ok = document.documentElement.scrollWidth <= window.innerWidth;
+        p.style.width = ''; p.style.flexBasis = '';
+        return { w, iw: window.innerWidth, ok };
+      });
+      check('窄屏下分割条写入的内联宽度被覆盖', Math.abs(m.w - m.iw) <= 12 && m.ok, m.w + ' / ' + m.iw);
+
+      await page.evaluate(s => window.jsonviewer.setText(s), sample);
+      await page.evaluate(() => window.jsonviewer.showPane('center'));
+      await raf2();
+      m = await page.evaluate(() => {
+        const first = document.querySelector('#treeLayer .tn'), r = first ? first.getBoundingClientRect() : null;
+        return { n: document.querySelectorAll('#treeLayer .tn').length, top: r ? r.top : -1, bottom: r ? r.bottom : -1, ih: window.innerHeight, sel: document.querySelector('#paneBar .on').getAttribute('data-pane') };
+      });
+      check('切到视图栏：树可见、数据栏隐藏', (await vis('#treePanel')) && !(await vis('#leftPanel')) && m.sel === 'center');
+      check('视图栏树有行且首行在视口内', m.n > 0 && m.top >= 0 && m.bottom <= m.ih, m.n + ' 行, top=' + m.top);
+      await page.click('#tabConvert'); await page.evaluate(() => window.jsonviewer.whenIdle()); await raf2();
+      m = await page.$eval('.conv-toolbar', e => ({ sw: e.scrollWidth, cw: e.clientWidth }));
+      check('窄屏转换工具栏不溢出（允许换行）', m.cw > 0 && m.sw <= m.cw, m.sw + ' <= ' + m.cw);
+      m = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+      check('转换标签下仍无横向溢出', m);
+      await page.click('#tabTree'); await raf2();
+
+      await page.evaluate(() => window.jsonviewer.showPane('right'));
+      check('切到属性栏：属性表有行', (await vis('#gridPanel')) && !(await vis('#treePanel')) && (await page.$$eval('#gridRows tr', trs => trs.length)) > 0);
+      await page.evaluate(() => window.jsonviewer.showPane('left'));
+      await raf2();
+      m = await page.evaluate(() => { const c = document.querySelector('#edit .cm-content'); return c ? c.getBoundingClientRect().width : 0; });
+      check('切回数据栏：编辑器可见且有宽度', (await vis('#edit .cm-editor')) && m > 0, m);
+
+      // 退出窄屏：三栏都显示、切换栏隐藏、树按真实高度重新渲染（树栏隐藏时重新解析，只按 0 高度渲染了部分行）
+      await page.evaluate(s => window.jsonviewer.setText(s), sample);
+      await page.setViewport({ width: 1400, height: 800 });
+      await raf2();
+      m = await page.evaluate(() => {
+        const b = document.getElementById('treeBody');
+        return { n: document.querySelectorAll('#treeLayer .tn').length, h: b.clientHeight };
+      });
+      check('恢复桌面宽度：三栏可见、切换栏隐藏', (await vis('#leftPanel')) && (await vis('#treePanel')) && (await vis('#gridPanel')) && !(await vis('#paneBar')));
+      check('恢复桌面宽度：树按真实高度重绘全部第一层', m.n === 11 && m.h > 0, m.n + ' 行, 高 ' + m.h);
+    }
+
     const me = await page.evaluate(() => fetch('api/me').then(r => r.text()));
     check('未启用登录验证：/api/me 返回 {"auth":false}，用户菜单隐藏', JSON.stringify(JSON.parse(me)) === '{"auth":false}' && (await page.$eval('#userMenu', e => e.hidden)), me.trim());
     check('无页面错误', errors.length === 0, errors.join(' | '));

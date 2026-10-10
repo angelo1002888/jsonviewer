@@ -1227,6 +1227,42 @@
   makeSplitter($('splitRight'), $('gridPanel'), 'right');
 
   /* ======================================================================
+   *  窄屏（≤ 800px）单栏切换：#app 的 data-pane 决定显示哪一栏，样式见 style.css 媒体查询
+   *  隐藏的栏 clientHeight 为 0，切换 / 跨越断点后要让树按真实高度重算行区间，编辑器重新测量
+   * ==================================================================== */
+  var PANES = ['left', 'center', 'right'];
+  var narrowMq = window.matchMedia('(max-width: 800px)');
+  function remeasure(pane) {
+    if (!pane || pane === 'left') view.requestMeasure();
+    if (!pane || pane === 'center') {
+      if (conv.tab === 'convert' && conv.view) conv.view.requestMeasure();
+      else tree.invalidate();
+    }
+  }
+  function showPane(name) {
+    if (PANES.indexOf(name) < 0) return;
+    $('app').setAttribute('data-pane', name);
+    var tabs = $('paneBar').querySelectorAll('.pane-tab');
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i].getAttribute('data-pane') === name;
+      tabs[i].classList.toggle('on', on);
+      tabs[i].setAttribute('aria-selected', String(on));
+    }
+    ctxMenu.hide();
+    optsMenu.hide();
+    userMenu.hide();
+    remeasure(name);
+  }
+  $('paneBar').addEventListener('click', function (e) {
+    var b = e.target.closest('.pane-tab');
+    if (b) showPane(b.getAttribute('data-pane'));
+  });
+  // 进入窄屏只剩当前栏可见；离开窄屏三栏都显示：两种情况都重算所有栏（树在隐藏期间可能按 0 高度渲染过）
+  function onNarrowChange() { remeasure(); }
+  if (narrowMq.addEventListener) narrowMq.addEventListener('change', onNarrowChange);
+  else if (narrowMq.addListener) narrowMq.addListener(onNarrowChange);
+
+  /* ======================================================================
    *  用户菜单（仅在服务端启用登录验证时显示）
    * ==================================================================== */
   var userMenu = {
@@ -1365,6 +1401,7 @@
     getFormat: function () { return { mode: fmtMode, format: curFmt }; },
     whenIdle: whenIdle,                                                   // 懒加载与随后的解析完成后 resolve
     showTab: showTab,                                                     // 'tree' | 'convert'，返回 Promise
+    showPane: showPane,                                                   // 窄屏单栏切换：'left' | 'center' | 'right'
     // 不经界面的转换：from 可为 'auto'；resolve { text, losses, warnings, inherent }，失败 reject FormatError
     convert: function (text, from, to, opts) {
       opts = opts || {};
